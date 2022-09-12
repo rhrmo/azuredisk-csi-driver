@@ -66,6 +66,8 @@ type DriverOptions struct {
 	SupportZone                bool
 	GetNodeInfoFromLabels      bool
 	EnableDiskCapacityCheck    bool
+	VMSSCacheTTLInSeconds      int64
+	VMType                     string
 }
 
 // CSIDriver defines the interface for a CSI driver.
@@ -105,6 +107,8 @@ type DriverCore struct {
 	supportZone                bool
 	getNodeInfoFromLabels      bool
 	enableDiskCapacityCheck    bool
+	vmssCacheTTLInSeconds      int64
+	vmType                     string
 }
 
 // Driver is the v1 implementation of the Azure Disk CSI Driver.
@@ -137,6 +141,8 @@ func newDriverV1(options *DriverOptions) *Driver {
 	driver.supportZone = options.SupportZone
 	driver.getNodeInfoFromLabels = options.GetNodeInfoFromLabels
 	driver.enableDiskCapacityCheck = options.EnableDiskCapacityCheck
+	driver.vmssCacheTTLInSeconds = options.VMSSCacheTTLInSeconds
+	driver.vmType = options.VMType
 	driver.volumeLocks = volumehelper.NewVolumeLocks()
 	driver.ioHandler = azureutils.NewOSIOHandler()
 	driver.hostUtil = hostutil.NewHostUtil()
@@ -171,20 +177,33 @@ func (d *Driver) Run(endpoint, kubeconfig string, disableAVSetNodes, testingMock
 	d.cloud = cloud
 	d.kubeconfig = kubeconfig
 
+	if d.vmType != "" {
+		klog.V(2).Infof("override VMType(%s) in cloud config as %s", d.cloud.VMType, d.vmType)
+		d.cloud.VMType = d.vmType
+	}
+
 	if d.NodeID == "" {
 		// Disable UseInstanceMetadata for controller to mitigate a timeout issue using IMDS
 		// https://github.com/kubernetes-sigs/azuredisk-csi-driver/issues/168
 		klog.V(2).Infof("disable UseInstanceMetadata for controller")
 		d.cloud.Config.UseInstanceMetadata = false
 
-		if d.cloud.VMType == azurecloudconsts.VMTypeVMSS && !d.cloud.DisableAvailabilitySetNodes {
-			if disableAVSetNodes {
-				klog.V(2).Infof("DisableAvailabilitySetNodes for controller since current VMType is vmss")
-				d.cloud.DisableAvailabilitySetNodes = true
-			} else {
-				klog.Warningf("DisableAvailabilitySetNodes for controller is set as false while current VMType is vmss")
-			}
+		if d.cloud.VMType == azurecloudconsts.VMTypeStandard && d.cloud.DisableAvailabilitySetNodes {
+			klog.V(2).Infof("set DisableAvailabilitySetNodes as false since VMType is %s", d.cloud.VMType)
+			d.cloud.DisableAvailabilitySetNodes = false
 		}
+
+		if d.cloud.VMType == azurecloudconsts.VMTypeVMSS && !d.cloud.DisableAvailabilitySetNodes && disableAVSetNodes {
+			klog.V(2).Infof("DisableAvailabilitySetNodes for controller since current VMType is vmss")
+			d.cloud.DisableAvailabilitySetNodes = true
+		}
+		klog.V(2).Infof("cloud: %s, location: %s, rg: %s, VMType: %s, PrimaryScaleSetName: %s, PrimaryAvailabilitySetName: %s, DisableAvailabilitySetNodes: %v", d.cloud.Cloud, d.cloud.Location, d.cloud.ResourceGroup, d.cloud.VMType, d.cloud.PrimaryScaleSetName, d.cloud.PrimaryAvailabilitySetName, d.cloud.DisableAvailabilitySetNodes)
+	}
+
+	if d.vmssCacheTTLInSeconds > 0 {
+		klog.V(2).Infof("reset vmssCacheTTLInSeconds as %d", d.vmssCacheTTLInSeconds)
+		d.cloud.VMCacheTTLInSeconds = int(d.vmssCacheTTLInSeconds)
+		d.cloud.VmssCacheTTLInSeconds = int(d.vmssCacheTTLInSeconds)
 	}
 
 	d.deviceHelper = optimization.NewSafeDeviceHelper()
@@ -385,4 +404,36 @@ func getNodeInfoFromLabels(ctx context.Context, nodeName string, kubeClient clie
 		return "", "", fmt.Errorf("node(%s) label is empty", nodeName)
 	}
 	return node.Labels[consts.WellKnownTopologyKey], node.Labels[consts.InstanceTypeKey], nil
+}
+
+// getDefaultDiskIOPSReadWrite according to requestGiB
+//
+//	ref: https://docs.microsoft.com/en-us/azure/virtual-machines/disks-types#ultra-disk-iops
+func getDefaultDiskIOPSReadWrite(requestGiB int) int {
+	iops := azurecloudconsts.DefaultDiskIOPSReadWrite
+	if requestGiB > iops {
+		iops = requestGiB
+	}
+	if iops > 160000 {
+		iops = 160000
+	}
+	return iops
+}
+
+// getDefaultDiskMBPSReadWrite according to requestGiB
+//
+//	ref: https://docs.microsoft.com/en-us/azure/virtual-machines/disks-types#ultra-disk-throughput
+func getDefaultDiskMBPSReadWrite(requestGiB int) int {
+	bandwidth := azurecloudconsts.DefaultDiskMBpsReadWrite
+	iops := getDefaultDiskIOPSReadWrite(requestGiB)
+	if iops/256 > bandwidth {
+		bandwidth = iops / 256
+	}
+	if bandwidth > iops/4 {
+		bandwidth = iops / 4
+	}
+	if bandwidth > 4000 {
+		bandwidth = 4000
+	}
+	return bandwidth
 }
