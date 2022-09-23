@@ -159,6 +159,7 @@ func TestEnsureMountPoint(t *testing.T) {
 		desc          string
 		target        string
 		skipOnWindows bool
+		skipOnDarwin  bool
 		expectedMnt   bool
 		expectedErr   testutil.TestError
 	}{
@@ -175,6 +176,7 @@ func TestEnsureMountPoint(t *testing.T) {
 			desc:          "[Error] Not a directory",
 			target:        azuredisk,
 			skipOnWindows: true, // no error reported in windows
+			skipOnDarwin:  true,
 			expectedErr: testutil.TestError{
 				DefaultError: &os.PathError{Op: "mkdir", Path: azuredisk, Err: syscall.ENOTDIR},
 			},
@@ -202,7 +204,7 @@ func TestEnsureMountPoint(t *testing.T) {
 	d.setMounter(fakeMounter)
 
 	for _, test := range tests {
-		if !(runtime.GOOS == "windows" && test.skipOnWindows) {
+		if !(runtime.GOOS == "windows" && test.skipOnWindows) && !(runtime.GOOS == "darwin" && test.skipOnDarwin) {
 			mnt, err := d.ensureMountPoint(test.target)
 			if !testutil.AssertError(&test.expectedErr, err) {
 				t.Errorf("desc: %s\n actualErr: (%v), expectedErr: (%v)", test.desc, err, test.expectedErr.Error())
@@ -325,9 +327,11 @@ func TestNodeGetVolumeStats(t *testing.T) {
 			expectedErr: status.Error(codes.InvalidArgument, "NodeGetVolumeStats volume path was empty"),
 		},
 		{
-			desc:        "Not existed volume path",
-			req:         csi.NodeGetVolumeStatsRequest{VolumePath: nonexistedPath, VolumeId: "vol_1"},
-			expectedErr: status.Errorf(codes.NotFound, "path /not/a/real/directory does not exist"),
+			desc:          "Not existed volume path",
+			req:           csi.NodeGetVolumeStatsRequest{VolumePath: nonexistedPath, VolumeId: "vol_1"},
+			expectedErr:   status.Errorf(codes.NotFound, "path /not/a/real/directory does not exist"),
+			skipOnWindows: true,
+			skipOnDarwin:  true,
 		},
 		{
 			desc: "Block volume path success",
@@ -341,10 +345,21 @@ func TestNodeGetVolumeStats(t *testing.T) {
 			expectedErr:   nil,
 		},
 		{
-			desc:         "standard success",
-			req:          csi.NodeGetVolumeStatsRequest{VolumePath: fakePath, VolumeId: "vol_1"},
-			skipOnDarwin: true,
-			expectedErr:  nil,
+			desc:          "standard success",
+			req:           csi.NodeGetVolumeStatsRequest{VolumePath: fakePath, VolumeId: "vol_1"},
+			skipOnDarwin:  true,
+			skipOnWindows: true,
+			expectedErr:   nil,
+		},
+		{
+			desc: "failed to determine block device",
+			setupFunc: func(t *testing.T, d FakeDriver) {
+				d.getHostUtil().(*azureutils.FakeHostUtil).SetPathIsDeviceResult(fakePath, true, fmt.Errorf("host util is not device path"))
+			},
+			req:           csi.NodeGetVolumeStatsRequest{VolumePath: fakePath, VolumeId: "vol_1"},
+			skipOnDarwin:  true,
+			skipOnWindows: true,
+			expectedErr:   status.Errorf(codes.NotFound, "failed to determine whether %s is block device: %v", fakePath, fmt.Errorf("host util is not device path")),
 		},
 	}
 
@@ -389,6 +404,12 @@ func TestNodeStageVolume(t *testing.T) {
 	volumeContextWithResize := map[string]string{
 		consts.ResizeRequired: "true",
 	}
+	volumeContextWithMaxShare := map[string]string{
+		consts.MaxSharesField: "0.1",
+	}
+	volumeContextWithPerfProfileField := map[string]string{
+		consts.PerfProfileField: "wrong",
+	}
 
 	stdVolCapBlock := &csi.VolumeCapability_Block{
 		Block: &csi.VolumeCapability_BlockVolume{},
@@ -408,6 +429,9 @@ func TestNodeStageVolume(t *testing.T) {
 	}
 	fsckAction := func() ([]byte, []byte, error) {
 		return []byte{}, []byte{}, nil
+	}
+	blockSizeAction := func() ([]byte, []byte, error) {
+		return []byte(fmt.Sprintf("%d", stdCapacityRange.RequiredBytes)), []byte{}, nil
 	}
 	resize2fsAction := func() ([]byte, []byte, error) {
 		return []byte{}, []byte{}, nil
@@ -443,6 +467,12 @@ func TestNodeStageVolume(t *testing.T) {
 			expectedErr: status.Error(codes.InvalidArgument, "Volume capability not supported"),
 		},
 		{
+			desc: "MaxShares value not supported",
+			req: csi.NodeStageVolumeRequest{VolumeId: "vol_1", StagingTargetPath: sourceTest, VolumeCapability: &csi.VolumeCapability{AccessMode: &volumeCap,
+				AccessType: stdVolCapBlock}, VolumeContext: volumeContextWithMaxShare},
+			expectedErr: status.Error(codes.InvalidArgument, "MaxShares value not supported"),
+		},
+		{
 			desc: "Volume operation in progress",
 			setupFunc: func(t *testing.T, d FakeDriver) {
 				d.getVolumeLocks().TryAcquire("vol_1")
@@ -469,7 +499,6 @@ func TestNodeStageVolume(t *testing.T) {
 				PublishContext: invalidLUN,
 				VolumeContext:  volumeContext,
 			},
-
 			expectedErr: status.Error(codes.Internal, "failed to find disk on lun /dev/01. cannot parse deviceInfo: /dev/01"),
 		},
 		{
@@ -477,7 +506,7 @@ func TestNodeStageVolume(t *testing.T) {
 			skipOnDarwin:  true,
 			skipOnWindows: true,
 			setupFunc: func(t *testing.T, d FakeDriver) {
-				d.setNextCommandOutputScripts(blkidAction, fsckAction)
+				d.setNextCommandOutputScripts(blkidAction, fsckAction, blockSizeAction, blkidAction, blockSizeAction, blkidAction)
 			},
 			req: csi.NodeStageVolumeRequest{VolumeId: "vol_1", StagingTargetPath: sourceTest,
 				VolumeCapability: &csi.VolumeCapability{AccessMode: &volumeCap,
@@ -485,7 +514,6 @@ func TestNodeStageVolume(t *testing.T) {
 				PublishContext: publishContext,
 				VolumeContext:  volumeContext,
 			},
-
 			expectedErr: nil,
 		},
 		{
@@ -501,8 +529,26 @@ func TestNodeStageVolume(t *testing.T) {
 				PublishContext: publishContext,
 				VolumeContext:  volumeContextWithResize,
 			},
-
 			expectedErr: nil,
+		},
+		{
+			desc:          "failed to get perf attributes",
+			skipOnDarwin:  true,
+			skipOnWindows: true,
+			setupFunc: func(t *testing.T, d FakeDriver) {
+				d.setPerfOptimizationEnabled(true)
+				d.setNextCommandOutputScripts(blkidAction, fsckAction, blockSizeAction, blockSizeAction)
+			},
+			req: csi.NodeStageVolumeRequest{VolumeId: "vol_1", StagingTargetPath: sourceTest,
+				VolumeCapability: &csi.VolumeCapability{AccessMode: &volumeCap,
+					AccessType: stdVolCap},
+				PublishContext: publishContext,
+				VolumeContext:  volumeContextWithPerfProfileField,
+			},
+			cleanupFunc: func(t *testing.T, d FakeDriver) {
+				d.setPerfOptimizationEnabled(false)
+			},
+			expectedErr: status.Errorf(codes.Internal, "failed to get perf attributes for /dev/sdd. Error: %v", fmt.Errorf("Perf profile wrong is invalid")),
 		},
 		{
 			desc:          "Successfully staged with performance optimizations",
@@ -519,7 +565,59 @@ func TestNodeStageVolume(t *testing.T) {
 					Return(nil).
 					After(diskSupportsPerfOptimizationCall)
 
-				d.setNextCommandOutputScripts(blkidAction, fsckAction)
+				d.setNextCommandOutputScripts(blkidAction, fsckAction, blockSizeAction, blockSizeAction)
+			},
+			req: csi.NodeStageVolumeRequest{VolumeId: "vol_1", StagingTargetPath: sourceTest,
+				VolumeCapability: &csi.VolumeCapability{AccessMode: &volumeCap,
+					AccessType: stdVolCap},
+				PublishContext: publishContext,
+				VolumeContext:  volumeContext,
+			},
+			cleanupFunc: func(t *testing.T, d FakeDriver) {
+				d.setPerfOptimizationEnabled(false)
+			},
+			expectedErr: nil,
+		},
+		{
+			desc:          "failed to optimize device performance",
+			skipOnDarwin:  true,
+			skipOnWindows: true,
+			setupFunc: func(t *testing.T, d FakeDriver) {
+				d.setPerfOptimizationEnabled(true)
+				mockoptimization := d.getDeviceHelper().(*mockoptimization.MockInterface)
+				diskSupportsPerfOptimizationCall := mockoptimization.EXPECT().
+					DiskSupportsPerfOptimization(gomock.Any(), gomock.Any()).
+					Return(true)
+				mockoptimization.EXPECT().
+					OptimizeDiskPerformance(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+					Return(fmt.Errorf("failed to optimize device performance")).
+					After(diskSupportsPerfOptimizationCall)
+
+				d.setNextCommandOutputScripts(blkidAction, fsckAction, blockSizeAction, blockSizeAction)
+			},
+			req: csi.NodeStageVolumeRequest{VolumeId: "vol_1", StagingTargetPath: sourceTest,
+				VolumeCapability: &csi.VolumeCapability{AccessMode: &volumeCap,
+					AccessType: stdVolCap},
+				PublishContext: publishContext,
+				VolumeContext:  volumeContext,
+			},
+			cleanupFunc: func(t *testing.T, d FakeDriver) {
+				d.setPerfOptimizationEnabled(false)
+			},
+			expectedErr: status.Errorf(codes.Internal, "failed to optimize device performance for target(/dev/sdd) error(%s)", fmt.Errorf("failed to optimize device performance")),
+		},
+		{
+			desc:          "Successfully staged with perf optimization is disabled",
+			skipOnDarwin:  true,
+			skipOnWindows: true,
+			setupFunc: func(t *testing.T, d FakeDriver) {
+				d.setPerfOptimizationEnabled(true)
+				mockoptimization := d.getDeviceHelper().(*mockoptimization.MockInterface)
+				mockoptimization.EXPECT().
+					DiskSupportsPerfOptimization(gomock.Any(), gomock.Any()).
+					Return(false)
+
+				d.setNextCommandOutputScripts(blkidAction, fsckAction, blockSizeAction, blockSizeAction)
 			},
 			req: csi.NodeStageVolumeRequest{VolumeId: "vol_1", StagingTargetPath: sourceTest,
 				VolumeCapability: &csi.VolumeCapability{AccessMode: &volumeCap,
@@ -656,6 +754,10 @@ func TestNodePublishVolume(t *testing.T) {
 	d, _ := NewFakeDriver(t)
 
 	volumeCap := csi.VolumeCapability_AccessMode{Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_SINGLE_WRITER}
+	volumeCapWrong := csi.VolumeCapability_AccessMode{Mode: 10}
+	volumeContextWithMaxShare := map[string]string{
+		consts.MaxSharesField: "0.1",
+	}
 	publishContext := map[string]string{
 		consts.LUN: "/dev/01",
 	}
@@ -685,6 +787,7 @@ func TestNodePublishVolume(t *testing.T) {
 		setup         func()
 		req           csi.NodePublishVolumeRequest
 		skipOnWindows bool
+		skipOnDarwin  bool
 		expectedErr   testutil.TestError
 		cleanup       func()
 	}{
@@ -700,6 +803,23 @@ func TestNodePublishVolume(t *testing.T) {
 			req:  csi.NodePublishVolumeRequest{VolumeCapability: &csi.VolumeCapability{AccessMode: &volumeCap, AccessType: stdVolCapBlock}},
 			expectedErr: testutil.TestError{
 				DefaultError: status.Error(codes.InvalidArgument, "Volume ID missing in the request"),
+			},
+		},
+		{
+			desc: "MaxShares value not supported",
+			req: csi.NodePublishVolumeRequest{VolumeCapability: &csi.VolumeCapability{AccessMode: &volumeCap, AccessType: stdVolCapBlock},
+				VolumeId:      "vol_1",
+				VolumeContext: volumeContextWithMaxShare},
+			expectedErr: testutil.TestError{
+				DefaultError: status.Error(codes.InvalidArgument, "MaxShares value not supported"),
+			},
+		},
+		{
+			desc: "Volume capability not supported",
+			req: csi.NodePublishVolumeRequest{VolumeCapability: &csi.VolumeCapability{AccessMode: &volumeCapWrong, AccessType: stdVolCapBlock},
+				VolumeId: "vol_1"},
+			expectedErr: testutil.TestError{
+				DefaultError: status.Error(codes.InvalidArgument, "Volume capability not supported"),
 			},
 		},
 		{
@@ -727,6 +847,7 @@ func TestNodePublishVolume(t *testing.T) {
 				StagingTargetPath: sourceTest,
 				Readonly:          true},
 			skipOnWindows: true, // permission issues
+			skipOnDarwin:  true,
 			expectedErr: testutil.TestError{
 				DefaultError: status.Errorf(codes.Internal, fmt.Sprintf("could not mount target \"%s\": "+
 					"mkdir %s: not a directory", azuredisk, azuredisk)),
@@ -801,7 +922,7 @@ func TestNodePublishVolume(t *testing.T) {
 		if test.setup != nil {
 			test.setup()
 		}
-		if !(test.skipOnWindows && runtime.GOOS == "windows") {
+		if !(test.skipOnWindows && runtime.GOOS == "windows") && !(test.skipOnDarwin && runtime.GOOS == "darwin") {
 			var err error
 			_, err = d.NodePublishVolume(context.Background(), &test.req)
 			if !testutil.AssertError(&test.expectedErr, err) {
