@@ -1,10 +1,4 @@
-reviewers:
-- andyzhangx
-- ZeroMagic
-- edreed
-- cvvz
-
 approvers:
-- andyzhangx
-- feiskyer
-- edreed
+- openshift-storage-maintainers
+component: "Storage"
+subcomponent: Kubernetes External Components
