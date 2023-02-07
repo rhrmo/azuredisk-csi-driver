@@ -25,14 +25,13 @@ import (
 	"sigs.k8s.io/azuredisk-csi-driver/test/utils/azure"
 	"sigs.k8s.io/azuredisk-csi-driver/test/utils/credentials"
 
-	"github.com/onsi/ginkgo"
+	"github.com/onsi/ginkgo/v2"
 	"github.com/pborman/uuid"
 
 	v1 "k8s.io/api/core/v1"
 	clientset "k8s.io/client-go/kubernetes"
 	restclientset "k8s.io/client-go/rest"
 	"k8s.io/kubernetes/test/e2e/framework"
-	e2elog "k8s.io/kubernetes/test/e2e/framework/log"
 )
 
 // DynamicallyProvisionedVolumeSnapshotTest will provision required StorageClass(es),VolumeSnapshotClass(es), PVC(s) and Pod(s)
@@ -86,7 +85,7 @@ func (t *DynamicallyProvisionedVolumeSnapshotTest) Run(client clientset.Interfac
 	defer func() {
 		// Only delete resource group the test created
 		if strings.HasPrefix(externalRG, credentials.ResourceGroupPrefix) {
-			e2elog.Logf("Deleting resource group %s", externalRG)
+			framework.Logf("Deleting resource group %s", externalRG)
 			err := azureClient.DeleteResourceGroup(ctx, externalRG)
 			framework.ExpectNoError(err)
 		}
@@ -108,11 +107,12 @@ func (t *DynamicallyProvisionedVolumeSnapshotTest) Run(client clientset.Interfac
 		tpod = NewTestPod(client, namespace, t.PodOverwrite.Cmd, t.PodOverwrite.IsWindows, t.Pod.WinServerVer)
 
 		tpod.SetupVolume(tpvc.persistentVolumeClaim, volume.VolumeMount.NameGenerate+"1", volume.VolumeMount.MountPathGenerate+"1", volume.VolumeMount.ReadOnly)
+		tpod.SetLabel(TestLabel)
 		ginkgo.By("deploying a new pod to overwrite pv data")
 		tpod.Create()
 		defer tpod.Cleanup()
-		ginkgo.By("checking that the pod's command exits with no error")
-		tpod.WaitForSuccess()
+		ginkgo.By("checking that the pod is running")
+		tpod.WaitForRunning()
 	}
 
 	defer tvsc.DeleteSnapshot(snapshot)
@@ -128,6 +128,13 @@ func (t *DynamicallyProvisionedVolumeSnapshotTest) Run(client clientset.Interfac
 	for i := range tPodWithSnapshotCleanup {
 		defer tPodWithSnapshotCleanup[i]()
 	}
+
+	if t.ShouldOverwrite {
+		// 	TODO: add test case which will schedule the original disk and the copied disk on the same node once the conflicting UUID issue is fixed.
+		ginkgo.By("Set pod anti-affinity to make sure two pods are scheduled on different nodes")
+		tPodWithSnapshot.SetAffinity(&TestPodAntiAffinity)
+	}
+
 	ginkgo.By("deploying a pod with a volume restored from the snapshot")
 	tPodWithSnapshot.Create()
 	defer tPodWithSnapshot.Cleanup()

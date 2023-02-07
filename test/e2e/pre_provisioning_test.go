@@ -24,10 +24,11 @@ import (
 	"sigs.k8s.io/azuredisk-csi-driver/test/e2e/testsuites"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
-	"github.com/onsi/ginkgo"
+	"github.com/onsi/ginkgo/v2"
 	v1 "k8s.io/api/core/v1"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/kubernetes/test/e2e/framework"
+	admissionapi "k8s.io/pod-security-admission/api"
 )
 
 const (
@@ -36,6 +37,7 @@ const (
 
 var _ = ginkgo.Describe("Pre-Provisioned", func() {
 	f := framework.NewDefaultFramework("azuredisk")
+	f.NamespacePodSecurityEnforceLevel = admissionapi.LevelPrivileged
 
 	var (
 		cs         clientset.Interface
@@ -148,6 +150,7 @@ var _ = ginkgo.Describe("Pre-Provisioned", func() {
 				"skuName":     "Premium_LRS",
 				"maxShares":   "2",
 				"cachingMode": "None",
+				"location":    "eastus2",
 			}
 			req.VolumeCapabilities[0].AccessType = &csi.VolumeCapability_Block{
 				Block: &csi.VolumeCapability_BlockVolume{},
@@ -244,6 +247,27 @@ var _ = ginkgo.Describe("Pre-Provisioned", func() {
 				VolumeContext: resp.Volume.VolumeContext,
 			}
 			test.Run(cs, ns)
+		})
+
+		ginkgo.It("should succeed when creating a PremiumV2_LRS disk [disk.csi.azure.com][windows]", func() {
+			skipIfUsingInTreeVolumePlugin()
+			skipIfOnAzureStackCloud()
+			req := makeCreateVolumeReq("premium-v2-disk", 100)
+			req.Parameters = map[string]string{
+				"skuName":           "PremiumV2_LRS",
+				"location":          "eastus", // eastus2euap, swedencentral, westeurope
+				"DiskIOPSReadWrite": "3000",
+				"DiskMBpsReadWrite": "200",
+			}
+			req.VolumeCapabilities[0].AccessType = &csi.VolumeCapability_Block{
+				Block: &csi.VolumeCapability_BlockVolume{},
+			}
+			resp, err := azurediskDriver.CreateVolume(context.Background(), req)
+			if err != nil {
+				ginkgo.Fail(fmt.Sprintf("create volume error: %v", err))
+			}
+			volumeID = resp.Volume.VolumeId
+			ginkgo.By(fmt.Sprintf("Successfully provisioned a PremiumV2_LRS disk volume: %q\n", volumeID))
 		})
 
 		ginkgo.It("should succeed when reattaching a disk to a new node on DanglingAttachError [disk.csi.azure.com]", func() {

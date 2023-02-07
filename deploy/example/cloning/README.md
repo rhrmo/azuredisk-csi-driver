@@ -17,7 +17,7 @@ outfile
 ```
 
 ## Create a PVC from an existing PVC
-
+>  Make sure application is not writing data to source disk
 ```console
 kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/azuredisk-csi-driver/master/deploy/example/cloning/pvc-azuredisk-cloning.yaml
 ```
@@ -62,3 +62,11 @@ $ kubectl exec nginx-restored-cloning -- ls /mnt/azuredisk
 lost+found
 outfile
 ```
+
+### Use volume cloning to copy a new disk with different sku
+>  disk sku change could be from LRS to ZRS, standard to premium, while cross zone or region is not supported 
+
+ - Make sure application is not writing data to source disk
+ - Delete existing storage class referenced by source disk PVC
+ - Create a new storage class with desired `skuName` value
+ - Follow steps above to create a new cloned PVC with new sku.

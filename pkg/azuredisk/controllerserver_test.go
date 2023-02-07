@@ -22,9 +22,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2021-07-01/compute"
+	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2022-03-01/compute"
 	"github.com/Azure/go-autorest/autorest/date"
-	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
@@ -32,6 +31,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/utils/pointer"
 	consts "sigs.k8s.io/azuredisk-csi-driver/pkg/azureconstants"
 	"sigs.k8s.io/azuredisk-csi-driver/pkg/azuredisk/mockcorev1"
 	"sigs.k8s.io/azuredisk-csi-driver/pkg/azuredisk/mockkubeclient"
@@ -235,7 +235,7 @@ func TestCreateVolume(t *testing.T) {
 					Parameters:         mp,
 				}
 				_, err := d.CreateVolume(context.Background(), req)
-				expectedErr := status.Error(codes.InvalidArgument, "azureDisk - NOT_EXISTING is not supported sku/storageaccounttype. Supported values are [Premium_LRS Premium_ZRS Standard_LRS StandardSSD_LRS StandardSSD_ZRS UltraSSD_LRS]")
+				expectedErr := status.Error(codes.InvalidArgument, "azureDisk - NOT_EXISTING is not supported sku/storageaccounttype. Supported values are [Premium_LRS Premium_ZRS Standard_LRS StandardSSD_LRS StandardSSD_ZRS UltraSSD_LRS PremiumV2_LRS]")
 				if !reflect.DeepEqual(err, expectedErr) {
 					t.Errorf("actualErr: (%v), expectedErr: (%v)", err, expectedErr)
 				}
@@ -437,6 +437,28 @@ func TestCreateVolume(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "[Failure] advanced perfProfile fails if no device settings provided",
+			testFunc: func(t *testing.T) {
+				d, _ := NewFakeDriver(t)
+				d.setPerfOptimizationEnabled(true)
+				stdCapacityRangetest := &csi.CapacityRange{
+					RequiredBytes: volumehelper.GiBToBytes(10),
+					LimitBytes:    volumehelper.GiBToBytes(15),
+				}
+				req := &csi.CreateVolumeRequest{
+					Name:               testVolumeName,
+					VolumeCapabilities: stdVolumeCapabilities,
+					CapacityRange:      stdCapacityRangetest,
+					Parameters:         map[string]string{"perfProfile": "advanced"},
+				}
+				_, err := d.CreateVolume(context.Background(), req)
+				expectedErr := status.Error(codes.InvalidArgument, "AreDeviceSettingsValid: No deviceSettings passed")
+				if !reflect.DeepEqual(err, expectedErr) {
+					t.Errorf("actualErr: (%v), expectedErr: (%v)", err, expectedErr)
+				}
+			},
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, tc.testFunc)
@@ -533,7 +555,7 @@ func TestGetSnapshotInfo(t *testing.T) {
 			expectedError:        nil,
 		},
 		{
-			// case insentive check
+			// case insensitive check
 			snapshotID:           "testurl/subscriptions/12/resourcegroups/23/providers/Microsoft.Compute/snapshots/snapshot-name",
 			expectedSnapshotName: "snapshot-name",
 			expectedRGName:       "23",
@@ -683,16 +705,16 @@ func TestControllerPublishVolume(t *testing.T) {
 				}
 				vmstatus := []compute.InstanceViewStatus{
 					{
-						Code: to.StringPtr("PowerState/Running"),
+						Code: pointer.String("PowerState/Running"),
 					},
 					{
-						Code: to.StringPtr("ProvisioningState/succeeded"),
+						Code: pointer.String("ProvisioningState/succeeded"),
 					},
 				}
 				vm.VirtualMachineProperties = &compute.VirtualMachineProperties{
-					ProvisioningState: to.StringPtr(string(compute.ProvisioningStateFailed)),
+					ProvisioningState: pointer.String(string(compute.ProvisioningStateFailed)),
 					HardwareProfile: &compute.HardwareProfile{
-						VMSize: compute.VirtualMachineSizeTypesStandardA0,
+						VMSize: compute.StandardA0,
 					},
 					InstanceView: &compute.VirtualMachineInstanceView{
 						Statuses: &vmstatus,
@@ -702,11 +724,12 @@ func TestControllerPublishVolume(t *testing.T) {
 					},
 				}
 				dataDisks := make([]compute.DataDisk, 1)
-				dataDisks[0] = compute.DataDisk{Lun: to.Int32Ptr(int32(0)), Name: &testVolumeName}
+				dataDisks[0] = compute.DataDisk{Lun: pointer.Int32(int32(0)), Name: &testVolumeName}
 				vm.StorageProfile.DataDisks = &dataDisks
 				mockVMsClient := d.getCloud().VirtualMachinesClient.(*mockvmclient.MockInterface)
 				mockVMsClient.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(vm, nil).AnyTimes()
-				mockVMsClient.EXPECT().Update(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(&retry.Error{RawError: fmt.Errorf("error")}).AnyTimes()
+				mockVMsClient.EXPECT().Update(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, &retry.Error{RawError: fmt.Errorf("error")}).AnyTimes()
+				mockVMsClient.EXPECT().UpdateAsync(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, &retry.Error{RawError: fmt.Errorf("error")}).AnyTimes()
 				expectedErr := status.Errorf(codes.Internal, "update instance \"unit-test-node\" failed with Retriable: false, RetryAfter: 0s, HTTPStatusCode: 0, RawError: error")
 				_, err := d.ControllerPublishVolume(context.Background(), req)
 				if !reflect.DeepEqual(err, expectedErr) {
@@ -740,16 +763,16 @@ func TestControllerPublishVolume(t *testing.T) {
 				}
 				vmstatus := []compute.InstanceViewStatus{
 					{
-						Code: to.StringPtr("PowerState/Running"),
+						Code: pointer.String("PowerState/Running"),
 					},
 					{
-						Code: to.StringPtr("ProvisioningState/succeeded"),
+						Code: pointer.String("ProvisioningState/succeeded"),
 					},
 				}
 				vm.VirtualMachineProperties = &compute.VirtualMachineProperties{
-					ProvisioningState: to.StringPtr(string(compute.ProvisioningStateSucceeded)),
+					ProvisioningState: pointer.String(string(compute.ProvisioningStateSucceeded)),
 					HardwareProfile: &compute.HardwareProfile{
-						VMSize: compute.VirtualMachineSizeTypesStandardA0,
+						VMSize: compute.StandardA0,
 					},
 					InstanceView: &compute.VirtualMachineInstanceView{
 						Statuses: &vmstatus,
@@ -759,7 +782,7 @@ func TestControllerPublishVolume(t *testing.T) {
 					},
 				}
 				dataDisks := make([]compute.DataDisk, 1)
-				dataDisks[0] = compute.DataDisk{Lun: to.Int32Ptr(int32(0)), Name: &testVolumeName}
+				dataDisks[0] = compute.DataDisk{Lun: pointer.Int32(int32(0)), Name: &testVolumeName}
 				vm.StorageProfile.DataDisks = &dataDisks
 				mockVMsClient := d.getCloud().VirtualMachinesClient.(*mockvmclient.MockInterface)
 				mockVMsClient.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(vm, nil).AnyTimes()
@@ -798,16 +821,16 @@ func TestControllerPublishVolume(t *testing.T) {
 				}
 				vmstatus := []compute.InstanceViewStatus{
 					{
-						Code: to.StringPtr("PowerState/Running"),
+						Code: pointer.String("PowerState/Running"),
 					},
 					{
-						Code: to.StringPtr("ProvisioningState/succeeded"),
+						Code: pointer.String("ProvisioningState/succeeded"),
 					},
 				}
 				vm.VirtualMachineProperties = &compute.VirtualMachineProperties{
-					ProvisioningState: to.StringPtr(string(compute.ProvisioningStateSucceeded)),
+					ProvisioningState: pointer.String(string(compute.ProvisioningStateSucceeded)),
 					HardwareProfile: &compute.HardwareProfile{
-						VMSize: compute.VirtualMachineSizeTypesStandardA0,
+						VMSize: compute.StandardA0,
 					},
 					InstanceView: &compute.VirtualMachineInstanceView{
 						Statuses: &vmstatus,

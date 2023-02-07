@@ -19,7 +19,7 @@ package vmclient
 import (
 	"context"
 
-	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2021-07-01/compute"
+	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2022-03-01/compute"
 	"github.com/Azure/go-autorest/autorest/azure"
 
 	"sigs.k8s.io/cloud-provider-azure/pkg/retry"
@@ -27,7 +27,7 @@ import (
 
 const (
 	// APIVersion is the API version for VirtualMachine.
-	APIVersion = "2020-12-01"
+	APIVersion = "2022-03-01"
 	// AzureStackCloudAPIVersion is the API version for Azure Stack
 	AzureStackCloudAPIVersion = "2017-12-01"
 	// AzureStackCloudName is the cloud name of Azure Stack
@@ -43,17 +43,23 @@ type Interface interface {
 	// List gets a list of VirtualMachines in the resourceGroupName.
 	List(ctx context.Context, resourceGroupName string) ([]compute.VirtualMachine, *retry.Error)
 
+	// ListVmssFlexVMsWithoutInstanceView gets a list of VirtualMachine in the VMSS Flex without InstanceView.
+	ListVmssFlexVMsWithoutInstanceView(ctx context.Context, vmssFlexID string) ([]compute.VirtualMachine, *retry.Error)
+
+	// ListVmssFlexVMsWithOnlyInstanceView gets a list of VirtualMachine in the VMSS Flex with only InstanceView.
+	ListVmssFlexVMsWithOnlyInstanceView(ctx context.Context, vmssFlexID string) ([]compute.VirtualMachine, *retry.Error)
+
 	// CreateOrUpdate creates or updates a VirtualMachine.
 	CreateOrUpdate(ctx context.Context, resourceGroupName string, VMName string, parameters compute.VirtualMachine, source string) *retry.Error
 
 	// Update updates a VirtualMachine.
-	Update(ctx context.Context, resourceGroupName string, VMName string, parameters compute.VirtualMachineUpdate, source string) *retry.Error
+	Update(ctx context.Context, resourceGroupName string, VMName string, parameters compute.VirtualMachineUpdate, source string) (*compute.VirtualMachine, *retry.Error)
 
 	// UpdateAsync updates a VirtualMachine asynchronously
 	UpdateAsync(ctx context.Context, resourceGroupName string, VMName string, parameters compute.VirtualMachineUpdate, source string) (*azure.Future, *retry.Error)
 
 	// WaitForUpdateResult waits for the response of the update request
-	WaitForUpdateResult(ctx context.Context, future *azure.Future, resourceGroupName, source string) *retry.Error
+	WaitForUpdateResult(ctx context.Context, future *azure.Future, resourceGroupName, source string) (*compute.VirtualMachine, *retry.Error)
 
 	// Delete deletes a VirtualMachine.
 	Delete(ctx context.Context, resourceGroupName string, VMName string) *retry.Error
