@@ -12,8 +12,12 @@ DriverInfo:
         block: true
         fsGroup: true
         topology: true
-        controllerExpansion: false
-        nodeExpansion: false
+        controllerExpansion: true
+        nodeExpansion: true
+        offlineExpansion: true
+        onlineExpansion: true
         volumeLimits: true
         snapshotDataSource: true
         pvcDataSource: true
+    SupportedSizeRange:
+        Min: 1Gi

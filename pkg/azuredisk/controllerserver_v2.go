@@ -27,11 +27,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2022-03-01/compute"
+	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2022-08-01/compute"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -39,7 +40,6 @@ import (
 	volerr "k8s.io/cloud-provider/volume/errors"
 	"k8s.io/klog/v2"
 
-	"sigs.k8s.io/azuredisk-csi-driver/pkg/azureconstants"
 	consts "sigs.k8s.io/azuredisk-csi-driver/pkg/azureconstants"
 	"sigs.k8s.io/azuredisk-csi-driver/pkg/azureutils"
 	"sigs.k8s.io/azuredisk-csi-driver/pkg/optimization"
@@ -73,10 +73,10 @@ func (d *DriverV2) CreateVolume(ctx context.Context, req *csi.CreateVolumeReques
 	if !azureutils.IsValidVolumeCapabilities(volCaps, diskParams.MaxShares) {
 		return nil, status.Error(codes.InvalidArgument, "Volume capability not supported")
 	}
-	isAdvancedPerfProfile := strings.EqualFold(diskParams.PerfProfile, azureconstants.PerfProfileAdvanced)
+	isAdvancedPerfProfile := strings.EqualFold(diskParams.PerfProfile, consts.PerfProfileAdvanced)
 	// If perfProfile is set to advanced and no/invalid device settings are provided, fail the request
 	if d.getPerfOptimizationEnabled() && isAdvancedPerfProfile {
-		if err := optimization.AreDeviceSettingsValid(azureconstants.DummyBlockDevicePathLinux, diskParams.DeviceSettings); err != nil {
+		if err := optimization.AreDeviceSettingsValid(consts.DummyBlockDevicePathLinux, diskParams.DeviceSettings); err != nil {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
 	}
@@ -122,12 +122,21 @@ func (d *DriverV2) CreateVolume(ctx context.Context, req *csi.CreateVolumeReques
 	if _, err := azureutils.NormalizeCachingMode(diskParams.CachingMode); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	if skuName == compute.PremiumV2LRS {
+		// PremiumV2LRS only supports None caching mode
+		azureutils.SetKeyValueInMap(diskParams.VolumeContext, consts.CachingModeField, string(v1.AzureDataDiskCachingNone))
+	}
 
 	if err := azureutils.ValidateDiskEncryptionType(diskParams.DiskEncryptionType); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	networkAccessPolicy, err := azureutils.NormalizeNetworkAccessPolicy(diskParams.NetworkAccessPolicy)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
+	publicNetworkAccess, err := azureutils.NormalizePublicNetworkAccess(diskParams.PublicNetworkAccess)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -198,10 +207,12 @@ func (d *DriverV2) CreateVolume(ctx context.Context, req *csi.CreateVolumeReques
 		SourceType:          sourceType,
 		Tags:                diskParams.Tags,
 		Location:            diskParams.Location,
+		PerformancePlus:     diskParams.PerformancePlus,
 	}
-	// Azure Stack Cloud does not support NetworkAccessPolicy
+	// Azure Stack Cloud does not support NetworkAccessPolicy, PublicNetworkAccess
 	if !azureutils.IsAzureStackCloud(d.cloud.Config.Cloud, d.cloud.Config.DisableAzureStackCloud) {
 		volumeOptions.NetworkAccessPolicy = networkAccessPolicy
+		volumeOptions.PublicNetworkAccess = publicNetworkAccess
 		if diskParams.DiskAccessID != "" {
 			volumeOptions.DiskAccessID = &diskParams.DiskAccessID
 		}
@@ -346,8 +357,8 @@ func (d *DriverV2) ControllerPublishVolume(ctx context.Context, req *csi.Control
 		// Volume is already attached to node.
 		klog.V(2).Infof("Attach operation is successful. volume %s is already attached to node %s at lun %d.", diskURI, nodeName, lun)
 	} else {
-		if strings.Contains(strings.ToLower(err.Error()), strings.ToLower(azureconstants.TooManyRequests)) ||
-			strings.Contains(strings.ToLower(err.Error()), azureconstants.ClientThrottled) {
+		if strings.Contains(strings.ToLower(err.Error()), strings.ToLower(consts.TooManyRequests)) ||
+			strings.Contains(strings.ToLower(err.Error()), consts.ClientThrottled) {
 			return nil, status.Errorf(codes.Internal, err.Error())
 		}
 		var cachingMode compute.CachingTypes
@@ -745,7 +756,7 @@ func (d *DriverV2) CreateSnapshot(ctx context.Context, req *csi.CreateSnapshotRe
 	var customTags string
 	// set incremental snapshot as true by default
 	incremental := true
-	var resourceGroup, subsID string
+	var resourceGroup, subsID, dataAccessAuthMode string
 	var err error
 
 	parameters := req.GetParameters()
@@ -761,6 +772,8 @@ func (d *DriverV2) CreateSnapshot(ctx context.Context, req *csi.CreateSnapshotRe
 			resourceGroup = v
 		case consts.SubscriptionIDField:
 			subsID = v
+		case consts.DataAccessAuthModeField:
+			dataAccessAuthMode = v
 		default:
 			return nil, status.Errorf(codes.Internal, "AzureDisk - invalid option %s in VolumeSnapshotClass", k)
 		}
@@ -799,6 +812,13 @@ func (d *DriverV2) CreateSnapshot(ctx context.Context, req *csi.CreateSnapshotRe
 		Location: &d.cloud.Location,
 		Tags:     tags,
 	}
+	if dataAccessAuthMode != "" {
+		if err := azureutils.ValidateDataAccessAuthMode(dataAccessAuthMode); err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		snapshot.SnapshotProperties.DataAccessAuthMode = compute.DataAccessAuthMode(dataAccessAuthMode)
+	}
+
 	mc := metrics.NewMetricContext(consts.AzureDiskCSIDriverName, "controller_create_snapshot", d.cloud.ResourceGroup, d.cloud.SubscriptionID, d.Name)
 	isOperationSucceeded := false
 	defer func() {
@@ -811,7 +831,7 @@ func (d *DriverV2) CreateSnapshot(ctx context.Context, req *csi.CreateSnapshotRe
 			return nil, status.Error(codes.AlreadyExists, fmt.Sprintf("request snapshot(%s) under rg(%s) already exists, but the SourceVolumeId is different, error details: %v", snapshotName, resourceGroup, rerr.Error()))
 		}
 
-		azureutils.SleepIfThrottled(rerr.Error(), azureconstants.SnapshotOpThrottlingSleepSec)
+		azureutils.SleepIfThrottled(rerr.Error(), consts.SnapshotOpThrottlingSleepSec)
 		return nil, status.Error(codes.Internal, fmt.Sprintf("create snapshot error: %v", rerr.Error()))
 	}
 	klog.V(2).Infof("create snapshot(%s) under rg(%s) successfully", snapshotName, resourceGroup)
@@ -856,7 +876,7 @@ func (d *DriverV2) DeleteSnapshot(ctx context.Context, req *csi.DeleteSnapshotRe
 	klog.V(2).Infof("begin to delete snapshot(%s) under rg(%s)", snapshotName, resourceGroup)
 	rerr := d.cloud.SnapshotsClient.Delete(ctx, subsID, resourceGroup, snapshotName)
 	if rerr != nil {
-		azureutils.SleepIfThrottled(rerr.Error(), azureconstants.SnapshotOpThrottlingSleepSec)
+		azureutils.SleepIfThrottled(rerr.Error(), consts.SnapshotOpThrottlingSleepSec)
 		return nil, status.Error(codes.Internal, fmt.Sprintf("delete snapshot error: %v", rerr.Error()))
 	}
 	klog.V(2).Infof("delete snapshot(%s) under rg(%s) successfully", snapshotName, resourceGroup)

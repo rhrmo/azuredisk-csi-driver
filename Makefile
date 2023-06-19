@@ -19,7 +19,7 @@ REGISTRY_NAME ?= $(shell echo $(REGISTRY) | sed "s/.azurecr.io//g")
 IMAGE_NAME ?= azuredisk-csi
 ifneq ($(BUILD_V2), true)
 PLUGIN_NAME = azurediskplugin
-IMAGE_VERSION ?= v1.26.0
+IMAGE_VERSION ?= v1.28.0
 CHART_VERSION ?= latest
 else
 PLUGIN_NAME = azurediskpluginv2
@@ -40,16 +40,22 @@ REV = $(shell git describe --long --tags --dirty)
 BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 ENABLE_TOPOLOGY ?= false
 LDFLAGS ?= "-X ${PKG}/pkg/azuredisk.driverVersion=${IMAGE_VERSION} -X ${PKG}/pkg/azuredisk.gitCommit=${GIT_COMMIT} -X ${PKG}/pkg/azuredisk.buildDate=${BUILD_DATE} -extldflags "-static"" ${GOTAGS}
-E2E_HELM_OPTIONS ?= --set image.azuredisk.repository=$(REGISTRY)/$(IMAGE_NAME) --set image.azuredisk.tag=$(IMAGE_VERSION) --set image.azuredisk.pullPolicy=Always --set driver.userAgentSuffix="e2e-test"
+E2E_HELM_OPTIONS ?= --set image.azuredisk.repository=$(REGISTRY)/$(IMAGE_NAME) --set image.azuredisk.tag=$(IMAGE_VERSION) --set image.azuredisk.pullPolicy=Always --set driver.userAgentSuffix="e2e-test" --set snapshot.VolumeSnapshotClass.enabled=true --set snapshot.enabled=true --set node.getNodeIDFromIMDS=true
 E2E_HELM_OPTIONS += ${EXTRA_HELM_OPTIONS}
 ifdef DISABLE_ZONE
 E2E_HELM_OPTIONS += --set node.supportZone=false
+endif
+ifdef KUBERNETES_VERSION # disable KubeletRegistrationProbe on capz cluster testing
+E2E_HELM_OPTIONS += --set linux.enableRegistrationProbe=false --set windows.enableRegistrationProbe=false
 endif
 GINKGO_FLAGS = -ginkgo.v -ginkgo.timeout=24h
 ifeq ($(ENABLE_TOPOLOGY), true)
 GINKGO_FLAGS += -ginkgo.focus="\[multi-az\]"
 else
 GINKGO_FLAGS += -ginkgo.focus="\[single-az\]"
+endif
+ifdef NODE_MACHINE_TYPE  # capz cluster
+E2E_HELM_OPTIONS += --set controller.enableTrafficManager=true
 endif
 GOPATH ?= $(shell go env GOPATH)
 GOBIN ?= $(GOPATH)/bin
@@ -62,7 +68,7 @@ ALL_OS = linux windows
 ALL_ARCH.linux = amd64 arm64
 ALL_OS_ARCH.linux = $(foreach arch, ${ALL_ARCH.linux}, linux-$(arch))
 ALL_ARCH.windows = amd64
-ALL_OSVERSIONS.windows := 1809 20H2 ltsc2022
+ALL_OSVERSIONS.windows := 1809 ltsc2022
 ALL_OS_ARCH.windows = $(foreach arch, $(ALL_ARCH.windows), $(foreach osversion, ${ALL_OSVERSIONS.windows}, windows-${osversion}-${arch}))
 ALL_OS_ARCH = $(foreach os, $(ALL_OS), ${ALL_OS_ARCH.${os}})
 
@@ -72,7 +78,7 @@ WINDOWS_USE_HOST_PROCESS_CONTAINERS ?= false
 # The current context of image building
 # The architecture of the image
 ARCH ?= amd64
-# OS Version for the Windows images: 1809, 1903, 1909, 2004, ltsc2022
+# OS Version for the Windows images: 1809, ltsc2022
 OSVERSION ?= 1809
 # Output type of docker buildx build
 OUTPUT_TYPE ?= registry
@@ -115,7 +121,11 @@ integration-test-v2: azuredisk-v2
 
 .PHONY: e2e-bootstrap
 e2e-bootstrap: install-helm
+ifdef WINDOWS_USE_HOST_PROCESS_CONTAINERS
+	(docker pull $(CSI_IMAGE_TAG) && docker pull $(CSI_IMAGE_TAG)-windows-hp)  || make container-all push-manifest
+else
 	docker pull $(CSI_IMAGE_TAG) || make container-all push-manifest
+endif
 ifdef TEST_WINDOWS
 	helm install azuredisk-csi-driver charts/${CHART_VERSION}/azuredisk-csi-driver --namespace kube-system --wait --timeout=15m -v=5 --debug \
 		${E2E_HELM_OPTIONS} \
@@ -175,7 +185,9 @@ container-linux:
 		--file ./pkg/azurediskplugin/Dockerfile \
 		--platform="linux/$(ARCH)" \
 		--build-arg ARCH=${ARCH} \
-		--build-arg PLUGIN_NAME=${PLUGIN_NAME}
+		--build-arg PLUGIN_NAME=${PLUGIN_NAME} \
+		--provenance=false \
+		--sbom=false
 
 .PHONY: container-windows
 container-windows:
@@ -187,7 +199,26 @@ container-windows:
 		--file ./pkg/azurediskplugin/Windows.Dockerfile \
 		--build-arg ARCH=${ARCH} \
 		--build-arg PLUGIN_NAME=${PLUGIN_NAME} \
-		--build-arg OSVERSION=$(OSVERSION) 
+		--build-arg OSVERSION=$(OSVERSION) \
+		--provenance=false \
+		--sbom=false
+# workaround: only build hostprocess image once
+ifdef WINDOWS_USE_HOST_PROCESS_CONTAINERS
+ifeq ($(OSVERSION),ltsc2022)
+	$(MAKE) container-windows-hostprocess
+endif
+endif
+
+# Set --provenance=false to not generate the provenance (which is what causes the multi-platform index to be generated, even for a single platform).
+.PHONY: container-windows-hostprocess
+container-windows-hostprocess:
+	docker buildx build --pull --output=type=$(OUTPUT_TYPE) --platform="windows/$(ARCH)" --provenance=false --sbom=false \
+		-t $(CSI_IMAGE_TAG)-windows-hp -f ./pkg/azurediskplugin/WindowsHostProcess.Dockerfile .
+
+.PHONY: container-windows-hostprocess-latest
+container-windows-hostprocess-latest:
+	docker buildx build --pull --output=type=$(OUTPUT_TYPE) --platform="windows/$(ARCH)" --provenance=false --sbom=false \
+		-t $(CSI_IMAGE_TAG_LATEST)-windows-hp -f ./pkg/azurediskplugin/WindowsHostProcess.Dockerfile .
 
 .PHONY: container-all
 container-all: azuredisk-windows

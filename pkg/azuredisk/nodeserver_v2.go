@@ -22,7 +22,6 @@ package azuredisk
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -466,8 +465,10 @@ func (d *DriverV2) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolu
 		}
 	}
 
+	var retErr error
 	if err := resizeVolume(devicePath, volumePath, d.mounter); err != nil {
-		return nil, status.Errorf(codes.Internal, "could not resize volume %q (%q):  %v", volumeID, devicePath, err)
+		retErr = status.Errorf(codes.Internal, "could not resize volume %q (%q):  %v", volumeID, devicePath, err)
+		klog.Errorf("%v, will continue checking whether the volume has been resized", retErr)
 	}
 
 	gotBlockSizeBytes, err := getBlockSizeBytes(devicePath, d.mounter)
@@ -476,6 +477,9 @@ func (d *DriverV2) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolu
 	}
 	gotBlockGiB := volumehelper.RoundUpGiB(gotBlockSizeBytes)
 	if gotBlockGiB < requestGiB {
+		if retErr != nil {
+			return nil, retErr
+		}
 		// Because size was rounded up, getting more size than requested will be a success.
 		return nil, status.Errorf(codes.Internal, "resize requested for %v, but after resizing volume size was %v", requestGiB, gotBlockGiB)
 	}
@@ -522,7 +526,7 @@ func (d *DriverV2) ensureMountPoint(target string) (bool, error) {
 
 	if !notMnt {
 		// testing original mount point, make sure the mount link is valid
-		_, err := ioutil.ReadDir(target)
+		_, err := os.ReadDir(target)
 		if err == nil {
 			klog.V(2).Infof("already mounted to target %s", target)
 			return !notMnt, nil

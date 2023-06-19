@@ -44,6 +44,7 @@ const (
 	MaxSharesField                = "maxshares"
 	MinimumDiskSizeGiB            = 1
 	NetworkAccessPolicyField      = "networkaccesspolicy"
+	PublicNetworkAccessField      = "publicnetworkaccess"
 	NotFound                      = "NotFound"
 	PerfProfileBasic              = "basic"
 	PerfProfileAdvanced           = "advanced"
@@ -61,6 +62,7 @@ const (
 	ResizeRequired                = "resizeRequired"
 	SubscriptionIDField           = "subscriptionid"
 	ResourceGroupField            = "resourcegroup"
+	DataAccessAuthModeField       = "dataaccessauthmode"
 	ResourceNotFound              = "ResourceNotFound"
 	SkuNameField                  = "skuname"
 	SourceDiskSearchMaxDepth      = 10
@@ -79,6 +81,8 @@ const (
 	WriteAcceleratorEnabled       = "writeacceleratorenabled"
 	ZonedField                    = "zoned"
 	EnableAsyncAttachField        = "enableasyncattach"
+	PerformancePlusField          = "enableperformanceplus"
+	AttachDiskInitialDelayField   = "attachdiskinitialdelay"
 	TooManyRequests               = "TooManyRequests"
 	ClientThrottled               = "client throttled"
 	VolumeID                      = "volumeid"

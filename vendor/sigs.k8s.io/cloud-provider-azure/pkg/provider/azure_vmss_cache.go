@@ -23,7 +23,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2022-03-01/compute"
+	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2022-08-01/compute"
 
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
@@ -48,11 +48,11 @@ type VMSSEntry struct {
 }
 
 type NonVmssUniformNodesEntry struct {
-	VMSSFlexVMNodeNames   sets.String
-	VMSSFlexVMProviderIDs sets.String
-	AvSetVMNodeNames      sets.String
-	AvSetVMProviderIDs    sets.String
-	ClusterNodeNames      sets.String
+	VMSSFlexVMNodeNames   sets.Set[string]
+	VMSSFlexVMProviderIDs sets.Set[string]
+	AvSetVMNodeNames      sets.Set[string]
+	AvSetVMProviderIDs    sets.Set[string]
+	ClusterNodeNames      sets.Set[string]
 }
 
 type VMManagementType string
@@ -74,7 +74,7 @@ func (ss *ScaleSet) newVMSSCache(ctx context.Context) (*azcache.TimedCache, erro
 		}
 
 		resourceGroupNotFound := false
-		for _, resourceGroup := range allResourceGroups.List() {
+		for _, resourceGroup := range allResourceGroups.UnsortedList() {
 			allScaleSets, rerr := ss.VirtualMachineScaleSetsClient.List(ctx, resourceGroup)
 			if rerr != nil {
 				if rerr.IsNotFound() {
@@ -196,7 +196,7 @@ func (ss *ScaleSet) newVMSSVirtualMachinesCache() (*azcache.TimedCache, error) {
 			}
 			// set cache entry to nil when the VM is under deleting.
 			if vm.VirtualMachineScaleSetVMProperties != nil &&
-				strings.EqualFold(pointer.StringDeref(vm.VirtualMachineScaleSetVMProperties.ProvisioningState, ""), string(compute.ProvisioningStateDeleting)) {
+				strings.EqualFold(pointer.StringDeref(vm.VirtualMachineScaleSetVMProperties.ProvisioningState, ""), string(consts.ProvisioningStateDeleting)) {
 				klog.V(4).Infof("VMSS virtualMachine %q is under deleting, setting its cache to nil", computerName)
 				vmssVMCacheEntry.VirtualMachine = nil
 			}
@@ -316,17 +316,17 @@ func (ss *ScaleSet) updateCache(nodeName, resourceGroupName, vmssName, instanceI
 
 func (ss *ScaleSet) newNonVmssUniformNodesCache() (*azcache.TimedCache, error) {
 	getter := func(key string) (interface{}, error) {
-		vmssFlexVMNodeNames := sets.NewString()
-		vmssFlexVMProviderIDs := sets.NewString()
-		avSetVMNodeNames := sets.NewString()
-		avSetVMProviderIDs := sets.NewString()
+		vmssFlexVMNodeNames := sets.New[string]()
+		vmssFlexVMProviderIDs := sets.New[string]()
+		avSetVMNodeNames := sets.New[string]()
+		avSetVMProviderIDs := sets.New[string]()
 		resourceGroups, err := ss.GetResourceGroups()
 		if err != nil {
 			return nil, err
 		}
 		klog.V(2).Infof("refresh the cache of NonVmssUniformNodesCache in rg %v", resourceGroups)
 
-		for _, resourceGroup := range resourceGroups.List() {
+		for _, resourceGroup := range resourceGroups.UnsortedList() {
 			vms, err := ss.Cloud.ListVirtualMachines(resourceGroup)
 			if err != nil {
 				return nil, fmt.Errorf("getter function of nonVmssUniformNodesCache: failed to list vms in the resource group %s: %w", resourceGroup, err)

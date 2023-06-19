@@ -19,7 +19,6 @@ package azuredisk
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -394,8 +393,30 @@ func (d *Driver) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoRequest) (
 		maxDataDiskCount = getMaxDataDiskCount(instanceType)
 	}
 
+	nodeID := d.NodeID
+	if d.getNodeIDFromIMDS && d.cloud.UseInstanceMetadata && d.cloud.Metadata != nil {
+		metadata, err := d.cloud.Metadata.GetMetadata(azcache.CacheReadTypeDefault)
+		if err == nil && metadata != nil && metadata.Compute != nil {
+			klog.V(2).Infof("NodeGetInfo: NodeID(%s), metadata.Compute.Name(%s)", d.NodeID, metadata.Compute.Name)
+			if metadata.Compute.Name != "" {
+				if metadata.Compute.VMScaleSetName != "" {
+					id, err := getVMSSInstanceName(metadata.Compute.Name)
+					if err != nil {
+						klog.Errorf("getVMSSInstanceName failed with %v", err)
+					} else {
+						nodeID = id
+					}
+				} else {
+					nodeID = metadata.Compute.Name
+				}
+			}
+		} else {
+			klog.Warningf("get instance type(%s) failed with: %v", d.NodeID, err)
+		}
+	}
+
 	return &csi.NodeGetInfoResponse{
-		NodeId:             d.NodeID,
+		NodeId:             nodeID,
 		MaxVolumesPerNode:  maxDataDiskCount,
 		AccessibleTopology: topology,
 	}, nil
@@ -481,8 +502,10 @@ func (d *Driver) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolume
 		}
 	}
 
+	var retErr error
 	if err := resizeVolume(devicePath, volumePath, d.mounter); err != nil {
-		return nil, status.Errorf(codes.Internal, "could not resize volume %q (%q):  %v", volumeID, devicePath, err)
+		retErr = status.Errorf(codes.Internal, "could not resize volume %q (%q):  %v", volumeID, devicePath, err)
+		klog.Errorf("%v, will continue checking whether the volume has been resized", retErr)
 	}
 
 	gotBlockSizeBytes, err := getBlockSizeBytes(devicePath, d.mounter)
@@ -491,9 +514,13 @@ func (d *Driver) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolume
 	}
 	gotBlockGiB := volumehelper.RoundUpGiB(gotBlockSizeBytes)
 	if gotBlockGiB < requestGiB {
+		if retErr != nil {
+			return nil, retErr
+		}
 		// Because size was rounded up, getting more size than requested will be a success.
 		return nil, status.Errorf(codes.Internal, "resize requested for %v, but after resizing volume size was %v", requestGiB, gotBlockGiB)
 	}
+
 	klog.V(2).Infof("NodeExpandVolume succeeded on resizing volume %v to %v", volumeID, gotBlockSizeBytes)
 
 	return &csi.NodeExpandVolumeResponse{
@@ -537,7 +564,7 @@ func (d *Driver) ensureMountPoint(target string) (bool, error) {
 
 	if !notMnt {
 		// testing original mount point, make sure the mount link is valid
-		_, err := ioutil.ReadDir(target)
+		_, err := os.ReadDir(target)
 		if err == nil {
 			klog.V(2).Infof("already mounted to target %s", target)
 			return !notMnt, nil

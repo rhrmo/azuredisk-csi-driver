@@ -1,11 +1,12 @@
 # Azure Disk CSI driver for Kubernetes
 
-[![Travis](https://travis-ci.org/kubernetes-sigs/azuredisk-csi-driver.svg)](https://travis-ci.org/kubernetes-sigs/azuredisk-csi-driver)
+![linux build status](https://github.com/kubernetes-sigs/azuredisk-csi-driver/actions/workflows/linux.yml/badge.svg)
+![windows build status](https://github.com/kubernetes-sigs/azuredisk-csi-driver/actions/workflows/windows.yml/badge.svg)
 [![Coverage Status](https://coveralls.io/repos/github/kubernetes-sigs/azuredisk-csi-driver/badge.svg?branch=master)](https://coveralls.io/github/kubernetes-sigs/azuredisk-csi-driver?branch=master)
 [![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fkubernetes-sigs%2Fazuredisk-csi-driver.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Fkubernetes-sigs%2Fazuredisk-csi-driver?ref=badge_shield)
 
 ### About
-This driver allows Kubernetes to access [Azure Disk](https://azure.microsoft.com/en-us/services/storage/disks/) volume, csi plugin name: `disk.csi.azure.com`
+This driver allows Kubernetes to access [Azure Disk](https://azure.microsoft.com/en-us/services/storage/disks/) volume, csi plugin name: `disk.csi.azure.com`, supported accessModes: `ReadWriteOnce`
 
 Disclaimer: Deploying this driver manually is not an officially supported Microsoft product. For a fully managed and supported experience on Kubernetes, use [AKS with the managed Azure disk csi driver](https://learn.microsoft.com/en-us/azure/aks/azure-disk-csi).
 
@@ -22,9 +23,9 @@ V2: Preview
 |Driver Version  |Image                                                      | supported k8s version |
 |----------------|-----------------------------------------------------------|-----------------------|
 |`master` branch |mcr.microsoft.com/k8s/csi/azuredisk-csi:latest             | 1.21+                 |
-|v1.26.1         |mcr.microsoft.com/oss/kubernetes-csi/azuredisk-csi:v1.26.1 | 1.21+                 |
-|v1.25.0         |mcr.microsoft.com/oss/kubernetes-csi/azuredisk-csi:v1.25.0 | 1.21+                 |
-|v1.24.0         |mcr.microsoft.com/oss/kubernetes-csi/azuredisk-csi:v1.24.0 | 1.21+                 |
+|v1.28.0         |mcr.microsoft.com/oss/kubernetes-csi/azuredisk-csi:v1.28.0 | 1.21+                 |
+|v1.27.1         |mcr.microsoft.com/oss/kubernetes-csi/azuredisk-csi:v1.27.1 | 1.21+                 |
+|v1.26.4         |mcr.microsoft.com/oss/kubernetes-csi/azuredisk-csi:v1.26.4 | 1.21+                 |
 
 #### V2
 
@@ -52,8 +53,10 @@ Please refer to [`disk.csi.azure.com` driver parameters](./docs/driver-parameter
 ### Install driver on a Kubernetes cluster
  - install by [helm charts](./charts)
  - install by [kubectl](./docs/install-azuredisk-csi-driver.md)
- - install open source csi driver on AKS, follow guide [here](./docs/install-driver-on-aks.md)
- - install managed csi driver on following platforms:
+ - install open source CSI driver on following platforms:
+    - [AKS](./docs/install-driver-on-aks.md)
+    - [Azure RedHat OpenShift](https://github.com/ezYakaEagle442/aro-pub-storage/blob/master/setup-store-CSI-driver-azure-disk.md)
+ - install managed CSI driver on following platforms:
    - [AKS](https://learn.microsoft.com/en-us/azure/aks/csi-storage-drivers)
    - [Azure RedHat OpenShift](https://docs.openshift.com/container-platform/4.11/storage/container_storage_interface/persistent-storage-csi-azure.html)
 
@@ -77,6 +80,7 @@ Please refer to [`disk.csi.azure.com` driver parameters](./docs/driver-parameter
 - [Shared Disk](./deploy/example/sharedisk)
 - [Volume Limits](./deploy/example/volumelimits)
 - [fsGroupPolicy](./deploy/example/fsgroup)
+- [Workload identity](./docs/workload-identity.md)
 - [Advanced disk performance tuning (Preview)](./docs/perf-profiles.md)
 
 #### New in V2
