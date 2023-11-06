@@ -23,9 +23,9 @@ V2: Preview
 |Driver Version  |Image                                                      | supported k8s version |
 |----------------|-----------------------------------------------------------|-----------------------|
 |`master` branch |mcr.microsoft.com/k8s/csi/azuredisk-csi:latest             | 1.21+                 |
-|v1.28.1         |mcr.microsoft.com/oss/kubernetes-csi/azuredisk-csi:v1.28.1 | 1.21+                 |
+|v1.29.0         |mcr.microsoft.com/oss/kubernetes-csi/azuredisk-csi:v1.29.0 | 1.21+                 |
+|v1.28.3         |mcr.microsoft.com/oss/kubernetes-csi/azuredisk-csi:v1.28.3 | 1.21+                 |
 |v1.27.1         |mcr.microsoft.com/oss/kubernetes-csi/azuredisk-csi:v1.27.1 | 1.21+                 |
-|v1.26.4         |mcr.microsoft.com/oss/kubernetes-csi/azuredisk-csi:v1.26.4 | 1.21+                 |
 
 #### V2
 
@@ -77,7 +77,6 @@ Please refer to [`disk.csi.azure.com` driver parameters](./docs/driver-parameter
 - [Volume Expansion](./deploy/example/resize)
 - [Raw Block Volume](./deploy/example/rawblock)
 - [Windows](./deploy/example/windows)
-- [Shared Disk](./deploy/example/sharedisk)
 - [Volume Limits](./deploy/example/volumelimits)
 - [fsGroupPolicy](./deploy/example/fsgroup)
 - [Workload identity](./docs/workload-identity.md)

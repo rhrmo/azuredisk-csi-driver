@@ -41,11 +41,9 @@ import (
 	csicommon "sigs.k8s.io/azuredisk-csi-driver/pkg/csi-common"
 	"sigs.k8s.io/azuredisk-csi-driver/pkg/mounter"
 	"sigs.k8s.io/azuredisk-csi-driver/pkg/optimization"
-	"sigs.k8s.io/azuredisk-csi-driver/pkg/util"
 	volumehelper "sigs.k8s.io/azuredisk-csi-driver/pkg/util"
 	azcache "sigs.k8s.io/cloud-provider-azure/pkg/cache"
 	azurecloudconsts "sigs.k8s.io/cloud-provider-azure/pkg/consts"
-	"sigs.k8s.io/cloud-provider-azure/pkg/provider"
 	azure "sigs.k8s.io/cloud-provider-azure/pkg/provider"
 )
 
@@ -76,6 +74,7 @@ type DriverOptions struct {
 	VMType                       string
 	EnableWindowsHostProcess     bool
 	GetNodeIDFromIMDS            bool
+	EnableOtelTracing            bool
 }
 
 // CSIDriver defines the interface for a CSI driver.
@@ -123,6 +122,7 @@ type DriverCore struct {
 	vmType                       string
 	enableWindowsHostProcess     bool
 	getNodeIDFromIMDS            bool
+	enableOtelTracing            bool
 }
 
 // Driver is the v1 implementation of the Azure Disk CSI Driver.
@@ -163,6 +163,7 @@ func newDriverV1(options *DriverOptions) *Driver {
 	driver.vmType = options.VMType
 	driver.enableWindowsHostProcess = options.EnableWindowsHostProcess
 	driver.getNodeIDFromIMDS = options.GetNodeIDFromIMDS
+	driver.enableOtelTracing = options.EnableOtelTracing
 	driver.volumeLocks = volumehelper.NewVolumeLocks()
 	driver.ioHandler = azureutils.NewOSIOHandler()
 	driver.hostUtil = hostutil.NewHostUtil()
@@ -280,7 +281,7 @@ func (d *Driver) Run(endpoint, kubeconfig string, disableAVSetNodes, testingMock
 
 	s := csicommon.NewNonBlockingGRPCServer()
 	// Driver d act as IdentityServer, ControllerServer and NodeServer
-	s.Start(endpoint, d, d, d, testingMock)
+	s.Start(endpoint, d, d, d, testingMock, d.enableOtelTracing)
 	s.Wait()
 }
 
@@ -374,12 +375,12 @@ func (d *DriverCore) setVersion(version string) {
 }
 
 // getCloud returns the value of the cloud field. It is intended for use with unit tests.
-func (d *DriverCore) getCloud() *provider.Cloud {
+func (d *DriverCore) getCloud() *azure.Cloud {
 	return d.cloud
 }
 
 // setCloud sets the cloud field. It is intended for use with unit tests.
-func (d *DriverCore) setCloud(cloud *provider.Cloud) {
+func (d *DriverCore) setCloud(cloud *azure.Cloud) {
 	d.cloud = cloud
 }
 
@@ -417,25 +418,47 @@ func (d *DriverCore) getHostUtil() hostUtil {
 	return d.hostUtil
 }
 
+// getSnapshotCopyCompletionPercent returns the completion percent of copy snapshot
+func (d *DriverCore) getSnapshotCopyCompletionPercent(ctx context.Context, subsID, resourceGroup, copySnapshotName string) (float64, error) {
+	copySnapshot, rerr := d.cloud.SnapshotsClient.Get(ctx, subsID, resourceGroup, copySnapshotName)
+	if rerr != nil {
+		return 0.0, rerr.Error()
+	}
+
+	if copySnapshot.SnapshotProperties == nil || copySnapshot.SnapshotProperties.CompletionPercent == nil {
+		return 0.0, fmt.Errorf("copy snapshot(%s) under rg(%s) has no SnapshotProperties or CompletionPercent is nil", copySnapshotName, resourceGroup)
+	}
+
+	return *copySnapshot.SnapshotProperties.CompletionPercent, nil
+}
+
 // waitForSnapshotCopy wait for copy incremental snapshot to a new region until completionPercent is 100.0
 func (d *DriverCore) waitForSnapshotCopy(ctx context.Context, subsID, resourceGroup, copySnapshotName string, intervel, timeout time.Duration) error {
-	timeAfter := time.After(timeout)
-	timeTick := time.Tick(intervel)
+	completionPercent, err := d.getSnapshotCopyCompletionPercent(ctx, subsID, resourceGroup, copySnapshotName)
+	if err != nil {
+		return err
+	}
 
+	if completionPercent >= float64(100.0) {
+		klog.V(2).Infof("copy snapshot(%s) under rg(%s) complete", copySnapshotName, resourceGroup)
+		return nil
+	}
+
+	timeTick := time.Tick(intervel)
+	timeAfter := time.After(timeout)
 	for {
 		select {
 		case <-timeTick:
-			copySnapshot, rerr := d.cloud.SnapshotsClient.Get(ctx, subsID, resourceGroup, copySnapshotName)
-			if rerr != nil {
-				return rerr.Error()
+			completionPercent, err = d.getSnapshotCopyCompletionPercent(ctx, subsID, resourceGroup, copySnapshotName)
+			if err != nil {
+				return err
 			}
 
-			completionPercent := *copySnapshot.SnapshotProperties.CompletionPercent
-			klog.V(2).Infof("copy snapshot(%s) under rg(%s) region(%s) completionPercent: %f", copySnapshotName, resourceGroup, *copySnapshot.Location, completionPercent)
 			if completionPercent >= float64(100.0) {
-				klog.V(2).Infof("copy snapshot(%s) under rg(%s) region(%s) complete", copySnapshotName, resourceGroup, *copySnapshot.Location)
+				klog.V(2).Infof("copy snapshot(%s) under rg(%s) complete", copySnapshotName, resourceGroup)
 				return nil
 			}
+			klog.V(2).Infof("copy snapshot(%s) under rg(%s) completionPercent: %f", copySnapshotName, resourceGroup, completionPercent)
 		case <-timeAfter:
 			return fmt.Errorf("timeout waiting for copy snapshot(%s) under rg(%s)", copySnapshotName, resourceGroup)
 		}
@@ -480,10 +503,10 @@ func getDefaultDiskMBPSReadWrite(requestGiB int) int {
 	bandwidth := azurecloudconsts.DefaultDiskMBpsReadWrite
 	iops := getDefaultDiskIOPSReadWrite(requestGiB)
 	if iops/256 > bandwidth {
-		bandwidth = int(util.RoundUpSize(int64(iops), 256))
+		bandwidth = int(volumehelper.RoundUpSize(int64(iops), 256))
 	}
 	if bandwidth > iops/4 {
-		bandwidth = int(util.RoundUpSize(int64(iops), 4))
+		bandwidth = int(volumehelper.RoundUpSize(int64(iops), 4))
 	}
 	if bandwidth > 4000 {
 		bandwidth = 4000
