@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -266,6 +267,7 @@ users:
 }
 
 func TestGetCloudProvider(t *testing.T) {
+	locationRxp := regexp.MustCompile("(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?")
 	fakeCredFile, err := testutil.GetWorkDirPath("fake-cred-file.json")
 	if err != nil {
 		t.Errorf("GetWorkDirPath failed with %v", err)
@@ -317,6 +319,7 @@ users:
 		desc                  string
 		createFakeCredFile    bool
 		createFakeKubeConfig  bool
+		credFile              string
 		kubeconfig            string
 		userAgent             string
 		allowEmptyCloudConfig bool
@@ -352,6 +355,15 @@ users:
 			allowEmptyCloudConfig: true,
 			expectedErr:           nil,
 		},
+		{
+			desc:                  "[success] out of cluster & in cluster, no kubeconfig, a fake credential file with upper case Location format",
+			createFakeCredFile:    true,
+			kubeconfig:            "",
+			credFile:              "location: \"East US\"\n",
+			userAgent:             "useragent",
+			allowEmptyCloudConfig: false,
+			expectedErr:           nil,
+		},
 	}
 
 	for _, test := range tests {
@@ -362,6 +374,10 @@ users:
 			defer func() {
 				os.Remove(fakeCredFile)
 			}()
+
+			if err := os.WriteFile(fakeCredFile, []byte(test.credFile), 0666); err != nil {
+				t.Error(err)
+			}
 
 			t.Setenv(consts.DefaultAzureCredentialFileEnv, fakeCredFile)
 		}
@@ -382,6 +398,7 @@ users:
 			t.Errorf("desc: %s,\n input: %q, GetCloudProvider err: %v, expectedErr: %v", test.desc, test.kubeconfig, err, test.expectedErr)
 		}
 		if cloud != nil {
+			assert.Regexp(t, locationRxp, cloud.Location)
 			assert.Equal(t, cloud.UserAgent, test.userAgent)
 			assert.Equal(t, cloud.DiskRateLimit != nil && cloud.DiskRateLimit.CloudProviderRateLimit, false)
 			assert.Equal(t, cloud.SnapshotRateLimit != nil && cloud.SnapshotRateLimit.CloudProviderRateLimit, false)
@@ -1006,7 +1023,7 @@ func TestIsValidVolumeCapabilities(t *testing.T) {
 		description    string
 		volCaps        []*csi.VolumeCapability
 		maxShares      int
-		expectedResult bool
+		expectedResult error
 	}{
 		{
 			description: "[Success] Returns true for valid mount capabilities",
@@ -1021,7 +1038,7 @@ func TestIsValidVolumeCapabilities(t *testing.T) {
 				},
 			},
 			maxShares:      1,
-			expectedResult: true,
+			expectedResult: nil,
 		},
 		{
 			description: "[Failure] Returns false for unsupported mount access mode",
@@ -1036,7 +1053,7 @@ func TestIsValidVolumeCapabilities(t *testing.T) {
 				},
 			},
 			maxShares:      2,
-			expectedResult: false,
+			expectedResult: fmt.Errorf("mountVolume is not supported for access mode: MULTI_NODE_MULTI_WRITER"),
 		},
 		{
 			description: "[Failure] Returns false for invalid mount access mode",
@@ -1051,7 +1068,7 @@ func TestIsValidVolumeCapabilities(t *testing.T) {
 				},
 			},
 			maxShares:      1,
-			expectedResult: false,
+			expectedResult: fmt.Errorf("invalid access mode: [mount:<> access_mode:<mode:10 > ]"),
 		},
 		{
 			description: "[Success] Returns true for valid block capabilities",
@@ -1066,7 +1083,7 @@ func TestIsValidVolumeCapabilities(t *testing.T) {
 				},
 			},
 			maxShares:      1,
-			expectedResult: true,
+			expectedResult: nil,
 		},
 		{
 			description: "[Success] Returns true for shared block access mode",
@@ -1081,7 +1098,7 @@ func TestIsValidVolumeCapabilities(t *testing.T) {
 				},
 			},
 			maxShares:      2,
-			expectedResult: true,
+			expectedResult: nil,
 		},
 		{
 			description: "[Failure] Returns false for unsupported mount access mode",
@@ -1096,7 +1113,7 @@ func TestIsValidVolumeCapabilities(t *testing.T) {
 				},
 			},
 			maxShares:      1,
-			expectedResult: false,
+			expectedResult: fmt.Errorf("access mode: MULTI_NODE_MULTI_WRITER is not supported for non-shared disk"),
 		},
 		{
 			description: "[Failure] Returns false for invalid block access mode",
@@ -1111,7 +1128,7 @@ func TestIsValidVolumeCapabilities(t *testing.T) {
 				},
 			},
 			maxShares:      1,
-			expectedResult: false,
+			expectedResult: fmt.Errorf("invalid access mode: [block:<> access_mode:<mode:10 > ]"),
 		},
 		{
 			description: "[Failure] Returns false for empty volume capability",
@@ -1122,7 +1139,7 @@ func TestIsValidVolumeCapabilities(t *testing.T) {
 				},
 			},
 			maxShares:      1,
-			expectedResult: false,
+			expectedResult: fmt.Errorf("invalid access mode: []"),
 		},
 	}
 
@@ -1143,8 +1160,8 @@ func TestIsValidVolumeCapabilities(t *testing.T) {
 		},
 	}
 	caps = append(caps, &stdVolCap)
-	if !IsValidVolumeCapabilities(caps, 1) {
-		t.Errorf("Unexpected error")
+	if err := IsValidVolumeCapabilities(caps, 1); err != nil {
+		t.Errorf("Unexpected error: %v", err)
 	}
 	stdVolCap1 := csi.VolumeCapability{
 		AccessMode: &csi.VolumeCapability_AccessMode{
@@ -1152,8 +1169,8 @@ func TestIsValidVolumeCapabilities(t *testing.T) {
 		},
 	}
 	caps = append(caps, &stdVolCap1)
-	if IsValidVolumeCapabilities(caps, 1) {
-		t.Errorf("Unexpected error")
+	if err := IsValidVolumeCapabilities(caps, 1); err == nil {
+		t.Errorf("Unexpected success")
 	}
 }
 

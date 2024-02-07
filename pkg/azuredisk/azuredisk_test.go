@@ -30,11 +30,13 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/types"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/utils/pointer"
 	consts "sigs.k8s.io/azuredisk-csi-driver/pkg/azureconstants"
 	"sigs.k8s.io/cloud-provider-azure/pkg/azureclients/diskclient/mockdiskclient"
 	"sigs.k8s.io/cloud-provider-azure/pkg/azureclients/snapshotclient/mocksnapshotclient"
+	"sigs.k8s.io/cloud-provider-azure/pkg/azureclients/vmclient/mockvmclient"
 	azure "sigs.k8s.io/cloud-provider-azure/pkg/provider"
 	"sigs.k8s.io/cloud-provider-azure/pkg/retry"
 )
@@ -259,7 +261,7 @@ func TestGetDefaultDiskMBPSReadWrite(t *testing.T) {
 	}
 }
 
-func TestWaitForSnapshotCopy(t *testing.T) {
+func TestWaitForSnapshot(t *testing.T) {
 	testCases := []struct {
 		name     string
 		testFunc func(t *testing.T)
@@ -284,18 +286,19 @@ func TestWaitForSnapshotCopy(t *testing.T) {
 					RawError: fmt.Errorf("invalid snapshotID"),
 				}
 				mockSnapshotClient.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(snapshot, rerr).AnyTimes()
-				err := d.waitForSnapshotCopy(context.Background(), subID, resourceGroup, snapshotID, intervel, timeout)
+				err := d.waitForSnapshotReady(context.Background(), subID, resourceGroup, snapshotID, intervel, timeout)
 
 				wantErr := true
 				subErrMsg := "invalid snapshotID"
 				if (err != nil) != wantErr {
-					t.Errorf("waitForSnapshotCopy() error = %v, wantErr %v", err, wantErr)
+					t.Errorf("waitForSnapshotReady() error = %v, wantErr %v", err, wantErr)
 				}
 				if err != nil && !strings.Contains(err.Error(), subErrMsg) {
-					t.Errorf("waitForSnapshotCopy() error = %v, wantErr %v", err, subErrMsg)
+					t.Errorf("waitForSnapshotReady() error = %v, wantErr %v", err, subErrMsg)
 				}
 			},
 		},
+		//nolint:dupl
 		{
 			name: "timeout for waiting snapshot copy cross region",
 			testFunc: func(t *testing.T) {
@@ -324,18 +327,19 @@ func TestWaitForSnapshotCopy(t *testing.T) {
 				mockSnapshotClient := mocksnapshotclient.NewMockInterface(ctrl)
 				d.getCloud().SnapshotsClient = mockSnapshotClient
 				mockSnapshotClient.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(snapshot, nil).AnyTimes()
-				err := d.waitForSnapshotCopy(context.Background(), subID, resourceGroup, snapshotID, intervel, timeout)
+				err := d.waitForSnapshotReady(context.Background(), subID, resourceGroup, snapshotID, intervel, timeout)
 
 				wantErr := true
 				subErrMsg := "timeout"
 				if (err != nil) != wantErr {
-					t.Errorf("waitForSnapshotCopy() error = %v, wantErr %v", err, wantErr)
+					t.Errorf("waitForSnapshotReady() error = %v, wantErr %v", err, wantErr)
 				}
 				if err != nil && !strings.Contains(err.Error(), subErrMsg) {
-					t.Errorf("waitForSnapshotCopy() error = %v, wantErr %v", err, subErrMsg)
+					t.Errorf("waitForSnapshotReady() error = %v, wantErr %v", err, subErrMsg)
 				}
 			},
 		},
+		//nolint:dupl
 		{
 			name: "succeed for waiting snapshot copy cross region",
 			testFunc: func(t *testing.T) {
@@ -364,15 +368,15 @@ func TestWaitForSnapshotCopy(t *testing.T) {
 				mockSnapshotClient := mocksnapshotclient.NewMockInterface(ctrl)
 				d.getCloud().SnapshotsClient = mockSnapshotClient
 				mockSnapshotClient.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(snapshot, nil).AnyTimes()
-				err := d.waitForSnapshotCopy(context.Background(), subID, resourceGroup, snapshotID, intervel, timeout)
+				err := d.waitForSnapshotReady(context.Background(), subID, resourceGroup, snapshotID, intervel, timeout)
 
 				wantErr := false
 				subErrMsg := ""
 				if (err != nil) != wantErr {
-					t.Errorf("waitForSnapshotCopy() error = %v, wantErr %v", err, wantErr)
+					t.Errorf("waitForSnapshotReady() error = %v, wantErr %v", err, wantErr)
 				}
 				if err != nil && !strings.Contains(err.Error(), subErrMsg) {
-					t.Errorf("waitForSnapshotCopy() error = %v, wantErr %v", err, subErrMsg)
+					t.Errorf("waitForSnapshotReady() error = %v, wantErr %v", err, subErrMsg)
 				}
 			},
 		},
@@ -422,6 +426,70 @@ func TestGetVMSSInstanceName(t *testing.T) {
 		}
 		if !reflect.DeepEqual(err, test.expectedError) {
 			t.Errorf("Unexpected error: %v, expected error: %v, input: %s", err, test.expectedError, test.computeName)
+		}
+	}
+}
+
+func TestGetUsedLunsFromVolumeAttachments(t *testing.T) {
+	d, _ := NewFakeDriver(t)
+	tests := []struct {
+		name                string
+		nodeName            string
+		expectedUsedLunList []int
+		expectedErr         error
+	}{
+		{
+			name:                "nil kubeClient",
+			nodeName:            "test-node",
+			expectedUsedLunList: nil,
+			expectedErr:         fmt.Errorf("kubeClient or kubeClient.StorageV1() or kubeClient.StorageV1().VolumeAttachments() is nil"),
+		},
+	}
+	for _, test := range tests {
+		result, err := d.getUsedLunsFromVolumeAttachments(context.Background(), test.nodeName)
+		if !reflect.DeepEqual(err, test.expectedErr) {
+			t.Errorf("test(%s): err(%v) != expected err(%v)", test.name, err, test.expectedErr)
+		}
+		if !reflect.DeepEqual(result, test.expectedUsedLunList) {
+			t.Errorf("test(%s): result(%v) != expected result(%v)", test.name, result, test.expectedUsedLunList)
+		}
+	}
+}
+
+func TestGetUsedLunsFromNode(t *testing.T) {
+	d, _ := NewFakeDriver(t)
+	vm := compute.VirtualMachine{}
+	dataDisks := make([]compute.DataDisk, 2)
+	dataDisks[0] = compute.DataDisk{Lun: pointer.Int32(int32(0)), Name: &testVolumeName}
+	dataDisks[1] = compute.DataDisk{Lun: pointer.Int32(int32(2)), Name: &testVolumeName}
+	vm.VirtualMachineProperties = &compute.VirtualMachineProperties{
+		StorageProfile: &compute.StorageProfile{
+			DataDisks: &dataDisks,
+		},
+	}
+	mockVMsClient := d.getCloud().VirtualMachinesClient.(*mockvmclient.MockInterface)
+	mockVMsClient.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(vm, nil).AnyTimes()
+
+	tests := []struct {
+		name                string
+		nodeName            string
+		expectedUsedLunList []int
+		expectedErr         error
+	}{
+		{
+			name:                "lun 0 and 2 are used",
+			nodeName:            "test-node",
+			expectedUsedLunList: []int{0, 2},
+			expectedErr:         nil,
+		},
+	}
+	for _, test := range tests {
+		result, err := d.getUsedLunsFromNode(types.NodeName(test.nodeName))
+		if !reflect.DeepEqual(err, test.expectedErr) {
+			t.Errorf("test(%s): err(%v) != expected err(%v)", test.name, err, test.expectedErr)
+		}
+		if !reflect.DeepEqual(result, test.expectedUsedLunList) {
+			t.Errorf("test(%s): result(%v) != expected result(%v)", test.name, result, test.expectedUsedLunList)
 		}
 	}
 }

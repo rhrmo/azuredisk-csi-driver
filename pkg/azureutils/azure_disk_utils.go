@@ -35,18 +35,18 @@ import (
 	"github.com/pborman/uuid"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
+	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
-	"k8s.io/mount-utils"
-	"k8s.io/utils/pointer"
-
-	clientset "k8s.io/client-go/kubernetes"
 	api "k8s.io/kubernetes/pkg/apis/core"
 	volumeUtil "k8s.io/kubernetes/pkg/volume/util"
+	"k8s.io/mount-utils"
+	"k8s.io/utils/pointer"
 	consts "sigs.k8s.io/azuredisk-csi-driver/pkg/azureconstants"
 	"sigs.k8s.io/azuredisk-csi-driver/pkg/optimization"
 	"sigs.k8s.io/azuredisk-csi-driver/pkg/util"
+	"sigs.k8s.io/cloud-provider-azure/pkg/azclient/configloader"
 	azclients "sigs.k8s.io/cloud-provider-azure/pkg/azureclients"
 	azure "sigs.k8s.io/cloud-provider-azure/pkg/provider"
 )
@@ -172,27 +172,28 @@ func GetCloudProviderFromClient(ctx context.Context, kubeClient *clientset.Clien
 	var config *azure.Config
 	var fromSecret bool
 	var err error
-	az := &azure.Cloud{
-		InitSecretConfig: azure.InitSecretConfig{
-			SecretName:      secretName,
-			SecretNamespace: secretNamespace,
-			CloudConfigKey:  "cloud-config",
-		},
-	}
+	az := &azure.Cloud{}
 	if kubeClient != nil {
-		klog.V(2).Infof("reading cloud config from secret %s/%s", az.SecretNamespace, az.SecretName)
-		az.KubeClient = kubeClient
-		config, err = az.GetConfigFromSecret()
+		klog.V(2).Infof("reading cloud config from secret %s/%s", secretNamespace, secretName)
+		config, err := configloader.Load[azure.Config](ctx, &configloader.K8sSecretLoaderConfig{
+			K8sSecretConfig: configloader.K8sSecretConfig{
+				SecretName:      secretName,
+				SecretNamespace: secretNamespace,
+				CloudConfigKey:  "cloud-config",
+			},
+			KubeClient: kubeClient,
+		}, nil)
+		if err != nil {
+			klog.V(2).Infof("InitializeCloudFromSecret: failed to get cloud config from secret %s/%s: %v", secretNamespace, secretName, err)
+		}
 		if err == nil && config != nil {
 			fromSecret = true
 		}
-		if err != nil {
-			klog.V(2).Infof("InitializeCloudFromSecret: failed to get cloud config from secret %s/%s: %v", az.SecretNamespace, az.SecretName, err)
-		}
+		az.KubeClient = kubeClient
 	}
 
 	if config == nil {
-		klog.V(2).Infof("could not read cloud config from secret %s/%s", az.SecretNamespace, az.SecretName)
+		klog.V(2).Infof("could not read cloud config from secret %s/%s", secretNamespace, secretName)
 		credFile, ok := os.LookupEnv(consts.DefaultAzureCredentialFileEnv)
 		if ok && strings.TrimSpace(credFile) != "" {
 			klog.V(2).Infof("%s env var set as %v", consts.DefaultAzureCredentialFileEnv, credFile)
@@ -224,6 +225,11 @@ func GetCloudProviderFromClient(ctx context.Context, kubeClient *clientset.Clien
 			return nil, fmt.Errorf("no cloud config provided, error: %v", err)
 		}
 	} else {
+		// Location may be either upper case with spaces (e.g. "East US") or lower case without spaces (e.g. "eastus")
+		// Kubernetes does not allow whitespaces in label values, e.g. for topology keys
+		// ensure Kubernetes compatible format for Location by enforcing lowercase-no-space format
+		config.Location = strings.ToLower(strings.ReplaceAll(config.Location, " ", ""))
+
 		// disable disk related rate limit
 		config.DiskRateLimit = &azclients.RateLimitConfig{
 			CloudProviderRateLimit: false,
@@ -454,31 +460,35 @@ func IsValidDiskURI(diskURI string) error {
 	return nil
 }
 
-func IsValidVolumeCapabilities(volCaps []*csi.VolumeCapability, maxShares int) bool {
+// IsValidVolumeCapabilities checks whether the volume capabilities are valid
+func IsValidVolumeCapabilities(volCaps []*csi.VolumeCapability, maxShares int) error {
 	if ok := IsValidAccessModes(volCaps); !ok {
-		return false
+		return fmt.Errorf("invalid access mode: %v", volCaps)
 	}
 	for _, c := range volCaps {
 		blockVolume := c.GetBlock()
 		mountVolume := c.GetMount()
 		accessMode := c.GetAccessMode().GetMode()
 
-		if (blockVolume == nil && mountVolume == nil) ||
-			(blockVolume != nil && mountVolume != nil) {
-			return false
+		if blockVolume == nil && mountVolume == nil {
+			return fmt.Errorf("blockVolume and mountVolume are both nil")
+		}
+
+		if blockVolume != nil && mountVolume != nil {
+			return fmt.Errorf("blockVolume and mountVolume are both not nil")
 		}
 		if mountVolume != nil && (accessMode == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER ||
 			accessMode == csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY ||
 			accessMode == csi.VolumeCapability_AccessMode_MULTI_NODE_SINGLE_WRITER) {
-			return false
+			return fmt.Errorf("mountVolume is not supported for access mode: %s", accessMode.String())
 		}
 		if maxShares < 2 && (accessMode == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER ||
 			accessMode == csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY ||
 			accessMode == csi.VolumeCapability_AccessMode_MULTI_NODE_SINGLE_WRITER) {
-			return false
+			return fmt.Errorf("access mode: %s is not supported for non-shared disk", accessMode.String())
 		}
 	}
-	return true
+	return nil
 }
 
 func IsValidAccessModes(volCaps []*csi.VolumeCapability) bool {

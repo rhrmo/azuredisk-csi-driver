@@ -25,6 +25,7 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/mount-utils"
 	testingexec "k8s.io/utils/exec/testing"
 
@@ -87,12 +88,14 @@ type FakeDriver interface {
 	checkDiskCapacity(context.Context, string, string, string, int) (bool, error)
 	checkDiskExists(ctx context.Context, diskURI string) (*compute.Disk, error)
 	getSnapshotInfo(string) (string, string, string, error)
-	waitForSnapshotCopy(context.Context, string, string, string, time.Duration, time.Duration) error
+	waitForSnapshotReady(context.Context, string, string, string, time.Duration, time.Duration) error
 	getSnapshotByID(context.Context, string, string, string, string) (*csi.Snapshot, error)
 	ensureMountPoint(string) (bool, error)
 	ensureBlockTargetFile(string) error
 	getDevicePathWithLUN(lunStr string) (string, error)
-	setDiskThrottlingCache(key string, value string)
+	setThrottlingCache(key string, value string)
+	getUsedLunsFromVolumeAttachments(context.Context, string) ([]int, error)
+	getUsedLunsFromNode(nodeName types.NodeName) ([]int, error)
 }
 
 type fakeDriverV1 struct {
@@ -112,6 +115,7 @@ func newFakeDriverV1(t *testing.T) (*fakeDriverV1, error) {
 	driver.hostUtil = azureutils.NewFakeHostUtil()
 	driver.useCSIProxyGAInterface = true
 	driver.allowEmptyCloudConfig = true
+	driver.shouldWaitForSnapshotReady = true
 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -130,7 +134,7 @@ func newFakeDriverV1(t *testing.T) (*fakeDriverV1, error) {
 	if err != nil {
 		return nil, err
 	}
-	driver.getDiskThrottlingCache = cache
+	driver.throttlingCache = cache
 	driver.deviceHelper = mockoptimization.NewMockInterface(ctrl)
 
 	driver.AddControllerServiceCapabilities(
@@ -162,8 +166,8 @@ func (d *fakeDriverV1) setNextCommandOutputScripts(scripts ...testingexec.FakeAc
 	d.mounter.Exec.(*mounter.FakeSafeMounter).SetNextCommandOutputScripts(scripts...)
 }
 
-func (d *fakeDriverV1) setDiskThrottlingCache(key string, value string) {
-	d.getDiskThrottlingCache.Set(key, value)
+func (d *fakeDriverV1) setThrottlingCache(key string, value string) {
+	d.throttlingCache.Set(key, value)
 }
 
 func createVolumeCapabilities(accessMode csi.VolumeCapability_AccessMode_Mode) []*csi.VolumeCapability {

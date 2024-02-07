@@ -217,7 +217,7 @@ func TestCreateVolume(t *testing.T) {
 					Parameters:         mp,
 				}
 				_, err := d.CreateVolume(context.Background(), req)
-				expectedErr := status.Error(codes.InvalidArgument, "Volume capability not supported")
+				expectedErr := status.Error(codes.InvalidArgument, "mountVolume is not supported for access mode: MULTI_NODE_MULTI_WRITER")
 				if !reflect.DeepEqual(err, expectedErr) {
 					t.Errorf("actualErr: (%v), expectedErr: (%v)", err, expectedErr)
 				}
@@ -670,7 +670,7 @@ func TestControllerPublishVolume(t *testing.T) {
 					VolumeId:         "vol_1",
 					VolumeCapability: volumeCapWrong,
 				}
-				expectedErr := status.Error(codes.InvalidArgument, "Volume capability not supported")
+				expectedErr := status.Error(codes.InvalidArgument, "invalid access mode: [mount:<> access_mode:<mode:10 > ]")
 				_, err := d.ControllerPublishVolume(context.Background(), req)
 				if !reflect.DeepEqual(err, expectedErr) {
 					t.Errorf("actualErr: (%v), expectedErr: (%v)", err, expectedErr)
@@ -1236,7 +1236,7 @@ func TestCreateSnapshot(t *testing.T) {
 				mockSnapshotClient.EXPECT().CreateOrUpdate(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 				mockSnapshotClient.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(snapshot, rerr).AnyTimes()
 				_, err := d.CreateSnapshot(context.Background(), req)
-				expectedErr := status.Errorf(codes.Internal, "get snapshot unit-test from rg(rg) error: Retriable: false, RetryAfter: 0s, HTTPStatusCode: 0, RawError: get snapshot error")
+				expectedErr := status.Errorf(codes.Internal, "waitForSnapshotReady(, rg, unit-test) failed with Retriable: false, RetryAfter: 0s, HTTPStatusCode: 0, RawError: get snapshot error")
 				if !reflect.DeepEqual(err, expectedErr) {
 					t.Errorf("actualErr: (%v), expectedErr: (%v)", err, expectedErr)
 				}

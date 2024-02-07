@@ -31,10 +31,12 @@ import (
 	"google.golang.org/grpc/status"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/volume/util/hostutil"
 	"k8s.io/mount-utils"
+	"k8s.io/utils/pointer"
 
 	consts "sigs.k8s.io/azuredisk-csi-driver/pkg/azureconstants"
 	"sigs.k8s.io/azuredisk-csi-driver/pkg/azureutils"
@@ -75,6 +77,8 @@ type DriverOptions struct {
 	EnableWindowsHostProcess     bool
 	GetNodeIDFromIMDS            bool
 	EnableOtelTracing            bool
+	WaitForSnapshotReady         bool
+	CheckDiskLUNCollision        bool
 }
 
 // CSIDriver defines the interface for a CSI driver.
@@ -123,14 +127,16 @@ type DriverCore struct {
 	enableWindowsHostProcess     bool
 	getNodeIDFromIMDS            bool
 	enableOtelTracing            bool
+	shouldWaitForSnapshotReady   bool
+	checkDiskLUNCollision        bool
 }
 
 // Driver is the v1 implementation of the Azure Disk CSI Driver.
 type Driver struct {
 	DriverCore
 	volumeLocks *volumehelper.VolumeLocks
-	// a timed cache GetDisk throttling
-	getDiskThrottlingCache azcache.Resource
+	// a timed cache for throttling
+	throttlingCache azcache.Resource
 }
 
 // newDriverV1 Creates a NewCSIDriver object. Assumes vendor version is equal to driver version &
@@ -164,6 +170,8 @@ func newDriverV1(options *DriverOptions) *Driver {
 	driver.enableWindowsHostProcess = options.EnableWindowsHostProcess
 	driver.getNodeIDFromIMDS = options.GetNodeIDFromIMDS
 	driver.enableOtelTracing = options.EnableOtelTracing
+	driver.shouldWaitForSnapshotReady = options.WaitForSnapshotReady
+	driver.checkDiskLUNCollision = options.CheckDiskLUNCollision
 	driver.volumeLocks = volumehelper.NewVolumeLocks()
 	driver.ioHandler = azureutils.NewOSIOHandler()
 	driver.hostUtil = hostutil.NewHostUtil()
@@ -176,7 +184,7 @@ func newDriverV1(options *DriverOptions) *Driver {
 	if err != nil {
 		klog.Fatalf("%v", err)
 	}
-	driver.getDiskThrottlingCache = cache
+	driver.throttlingCache = cache
 	return &driver
 }
 
@@ -286,9 +294,18 @@ func (d *Driver) Run(endpoint, kubeconfig string, disableAVSetNodes, testingMock
 }
 
 func (d *Driver) isGetDiskThrottled() bool {
-	cache, err := d.getDiskThrottlingCache.Get(consts.ThrottlingKey, azcache.CacheReadTypeDefault)
+	cache, err := d.throttlingCache.Get(consts.GetDiskThrottlingKey, azcache.CacheReadTypeDefault)
 	if err != nil {
-		klog.Warningf("getDiskThrottlingCache(%s) return with error: %s", consts.ThrottlingKey, err)
+		klog.Warningf("throttlingCache(%s) return with error: %s", consts.GetDiskThrottlingKey, err)
+		return false
+	}
+	return cache != nil
+}
+
+func (d *Driver) isCheckDiskLunThrottled() bool {
+	cache, err := d.throttlingCache.Get(consts.CheckDiskLunThrottlingKey, azcache.CacheReadTypeDefault)
+	if err != nil {
+		klog.Warningf("throttlingCache(%s) return with error: %s", consts.CheckDiskLunThrottlingKey, err)
 		return false
 	}
 	return cache != nil
@@ -314,7 +331,7 @@ func (d *Driver) checkDiskExists(ctx context.Context, diskURI string) (*compute.
 	if rerr != nil {
 		if rerr.IsThrottled() || strings.Contains(rerr.RawError.Error(), consts.RateLimited) {
 			klog.Warningf("checkDiskExists(%s) is throttled with error: %v", diskURI, rerr.Error())
-			d.getDiskThrottlingCache.Set(consts.ThrottlingKey, "")
+			d.throttlingCache.Set(consts.GetDiskThrottlingKey, "")
 			return nil, nil
 		}
 		return nil, rerr.Error()
@@ -339,7 +356,7 @@ func (d *Driver) checkDiskCapacity(ctx context.Context, subsID, resourceGroup, d
 	} else {
 		if rerr.IsThrottled() || strings.Contains(rerr.RawError.Error(), consts.RateLimited) {
 			klog.Warningf("checkDiskCapacity(%s, %s) is throttled with error: %v", resourceGroup, diskName, rerr.Error())
-			d.getDiskThrottlingCache.Set(consts.ThrottlingKey, "")
+			d.throttlingCache.Set(consts.GetDiskThrottlingKey, "")
 		}
 	}
 	return true, nil
@@ -418,29 +435,31 @@ func (d *DriverCore) getHostUtil() hostUtil {
 	return d.hostUtil
 }
 
-// getSnapshotCopyCompletionPercent returns the completion percent of copy snapshot
-func (d *DriverCore) getSnapshotCopyCompletionPercent(ctx context.Context, subsID, resourceGroup, copySnapshotName string) (float64, error) {
-	copySnapshot, rerr := d.cloud.SnapshotsClient.Get(ctx, subsID, resourceGroup, copySnapshotName)
+// getSnapshotCompletionPercent returns the completion percent of snapshot
+func (d *DriverCore) getSnapshotCompletionPercent(ctx context.Context, subsID, resourceGroup, snapshotName string) (float64, error) {
+	copySnapshot, rerr := d.cloud.SnapshotsClient.Get(ctx, subsID, resourceGroup, snapshotName)
 	if rerr != nil {
 		return 0.0, rerr.Error()
 	}
 
 	if copySnapshot.SnapshotProperties == nil || copySnapshot.SnapshotProperties.CompletionPercent == nil {
-		return 0.0, fmt.Errorf("copy snapshot(%s) under rg(%s) has no SnapshotProperties or CompletionPercent is nil", copySnapshotName, resourceGroup)
+		// If CompletionPercent is nil, it means the snapshot is complete
+		klog.V(2).Infof("snapshot(%s) under rg(%s) has no SnapshotProperties or CompletionPercent is nil", snapshotName, resourceGroup)
+		return 100.0, nil
 	}
 
 	return *copySnapshot.SnapshotProperties.CompletionPercent, nil
 }
 
-// waitForSnapshotCopy wait for copy incremental snapshot to a new region until completionPercent is 100.0
-func (d *DriverCore) waitForSnapshotCopy(ctx context.Context, subsID, resourceGroup, copySnapshotName string, intervel, timeout time.Duration) error {
-	completionPercent, err := d.getSnapshotCopyCompletionPercent(ctx, subsID, resourceGroup, copySnapshotName)
+// waitForSnapshotReady wait for completionPercent of snapshot is 100.0
+func (d *DriverCore) waitForSnapshotReady(ctx context.Context, subsID, resourceGroup, snapshotName string, intervel, timeout time.Duration) error {
+	completionPercent, err := d.getSnapshotCompletionPercent(ctx, subsID, resourceGroup, snapshotName)
 	if err != nil {
 		return err
 	}
 
 	if completionPercent >= float64(100.0) {
-		klog.V(2).Infof("copy snapshot(%s) under rg(%s) complete", copySnapshotName, resourceGroup)
+		klog.V(2).Infof("snapshot(%s) under rg(%s) complete", snapshotName, resourceGroup)
 		return nil
 	}
 
@@ -449,20 +468,74 @@ func (d *DriverCore) waitForSnapshotCopy(ctx context.Context, subsID, resourceGr
 	for {
 		select {
 		case <-timeTick:
-			completionPercent, err = d.getSnapshotCopyCompletionPercent(ctx, subsID, resourceGroup, copySnapshotName)
+			completionPercent, err = d.getSnapshotCompletionPercent(ctx, subsID, resourceGroup, snapshotName)
 			if err != nil {
 				return err
 			}
 
 			if completionPercent >= float64(100.0) {
-				klog.V(2).Infof("copy snapshot(%s) under rg(%s) complete", copySnapshotName, resourceGroup)
+				klog.V(2).Infof("snapshot(%s) under rg(%s) complete", snapshotName, resourceGroup)
 				return nil
 			}
-			klog.V(2).Infof("copy snapshot(%s) under rg(%s) completionPercent: %f", copySnapshotName, resourceGroup, completionPercent)
+			klog.V(2).Infof("snapshot(%s) under rg(%s) completionPercent: %f", snapshotName, resourceGroup, completionPercent)
 		case <-timeAfter:
-			return fmt.Errorf("timeout waiting for copy snapshot(%s) under rg(%s)", copySnapshotName, resourceGroup)
+			return fmt.Errorf("timeout waiting for snapshot(%s) under rg(%s)", snapshotName, resourceGroup)
 		}
 	}
+}
+
+// getUsedLunsFromVolumeAttachments returns a list of used luns from VolumeAttachments
+func (d *DriverCore) getUsedLunsFromVolumeAttachments(ctx context.Context, nodeName string) ([]int, error) {
+	kubeClient := d.cloud.KubeClient
+	if kubeClient == nil || kubeClient.StorageV1() == nil || kubeClient.StorageV1().VolumeAttachments() == nil {
+		return nil, fmt.Errorf("kubeClient or kubeClient.StorageV1() or kubeClient.StorageV1().VolumeAttachments() is nil")
+	}
+
+	volumeAttachments, err := kubeClient.StorageV1().VolumeAttachments().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	usedLuns := make([]int, 0)
+	if volumeAttachments == nil {
+		klog.V(2).Infof("volumeAttachments is nil")
+		return usedLuns, nil
+	}
+	for _, va := range volumeAttachments.Items {
+		klog.V(6).Infof("attacher: %s, nodeName: %s, Status: %v, PV: %s, attachmentMetadata: %v", va.Spec.Attacher, va.Spec.NodeName,
+			va.Status.Attached, pointer.StringDeref(va.Spec.Source.PersistentVolumeName, ""), va.Status.AttachmentMetadata)
+		if va.Spec.Attacher == consts.DefaultDriverName && strings.EqualFold(va.Spec.NodeName, nodeName) && va.Status.Attached {
+			if k, ok := va.Status.AttachmentMetadata[consts.LUN]; ok {
+				lun, err := strconv.Atoi(k)
+				if err != nil {
+					klog.Warningf("VolumeAttachment(%s) lun(%s) is not a valid integer", va.Name, k)
+					continue
+				}
+				usedLuns = append(usedLuns, lun)
+			}
+		}
+	}
+	return usedLuns, nil
+}
+
+// getUsedLunsFromNode returns a list of sorted used luns from Node
+func (d *DriverCore) getUsedLunsFromNode(nodeName types.NodeName) ([]int, error) {
+	disks, _, err := d.cloud.GetNodeDataDisks(nodeName, azcache.CacheReadTypeDefault)
+	if err != nil {
+		klog.Errorf("error of getting data disks for node %s: %v", nodeName, err)
+		return nil, err
+	}
+
+	usedLuns := make([]int, 0)
+	// get all disks attached to the node
+	for _, disk := range disks {
+		if disk.Lun == nil {
+			klog.Warningf("disk(%s) lun is nil", *disk.Name)
+			continue
+		}
+		usedLuns = append(usedLuns, int(*disk.Lun))
+	}
+	return usedLuns, nil
 }
 
 // getNodeInfoFromLabels get zone, instanceType from node labels

@@ -68,6 +68,8 @@ var (
 	trafficManagerPort           = flag.Int64("traffic-manager-port", 7788, "default traffic manager port")
 	enableWindowsHostProcess     = flag.Bool("enable-windows-host-process", false, "enable windows host process")
 	enableOtelTracing            = flag.Bool("enable-otel-tracing", false, "If set, enable opentelemetry tracing for the driver. The tracing is disabled by default. Configure the exporter endpoint with OTEL_EXPORTER_OTLP_ENDPOINT and other env variables, see https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/#general-sdk-configuration.")
+	waitForSnapshotReady         = flag.Bool("wait-for-snapshot-ready", true, "boolean flag to wait for snapshot ready when creating snapshot in same region")
+	checkDiskLUNCollision        = flag.Bool("check-disk-lun-collision", false, "boolean flag to check disk lun collisio before attaching disk")
 )
 
 func main() {
@@ -133,6 +135,8 @@ func handle() {
 		EnableWindowsHostProcess:     *enableWindowsHostProcess,
 		GetNodeIDFromIMDS:            *getNodeIDFromIMDS,
 		EnableOtelTracing:            *enableOtelTracing,
+		WaitForSnapshotReady:         *waitForSnapshotReady,
+		CheckDiskLUNCollision:        *checkDiskLUNCollision,
 	}
 	driver := azuredisk.NewDriver(&driverOptions)
 	if driver == nil {
@@ -154,7 +158,7 @@ func exportMetrics() {
 	serve(context.Background(), l, serveMetrics)
 }
 
-func serve(ctx context.Context, l net.Listener, serveFunc func(net.Listener) error) {
+func serve(_ context.Context, l net.Listener, serveFunc func(net.Listener) error) {
 	path := l.Addr().String()
 	klog.V(2).Infof("set up prometheus server on %v", path)
 	go func() {

@@ -70,8 +70,8 @@ func (d *DriverV2) CreateVolume(ctx context.Context, req *csi.CreateVolumeReques
 		return nil, status.Error(codes.InvalidArgument, "CreateVolume Volume capabilities must be provided")
 	}
 
-	if !azureutils.IsValidVolumeCapabilities(volCaps, diskParams.MaxShares) {
-		return nil, status.Error(codes.InvalidArgument, "Volume capability not supported")
+	if err := azureutils.IsValidVolumeCapabilities(volCaps, diskParams.MaxShares); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 	isAdvancedPerfProfile := strings.EqualFold(diskParams.PerfProfile, consts.PerfProfileAdvanced)
 	// If perfProfile is set to advanced and no/invalid device settings are provided, fail the request
@@ -315,8 +315,8 @@ func (d *DriverV2) ControllerPublishVolume(ctx context.Context, req *csi.Control
 		return nil, status.Error(codes.InvalidArgument, "MaxShares value not supported")
 	}
 
-	if !azureutils.IsValidVolumeCapabilities(caps, maxShares) {
-		return nil, status.Error(codes.InvalidArgument, "Volume capability not supported")
+	if err := azureutils.IsValidVolumeCapabilities(caps, maxShares); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	disk, err := d.checkDiskExists(ctx, diskURI)
@@ -373,7 +373,7 @@ func (d *DriverV2) ControllerPublishVolume(ctx context.Context, req *csi.Control
 		}
 		klog.V(2).Infof("Trying to attach volume %s to node %s", diskURI, nodeName)
 
-		lun, err = d.cloud.AttachDisk(ctx, true, diskName, diskURI, nodeName, cachingMode, disk)
+		lun, err = d.cloud.AttachDisk(ctx, true, diskName, diskURI, nodeName, cachingMode, disk, nil)
 		if err == nil {
 			klog.V(2).Infof("Attach operation successful: volume %s attached to node %s.", diskURI, nodeName)
 		} else {
@@ -383,7 +383,7 @@ func (d *DriverV2) ControllerPublishVolume(ctx context.Context, req *csi.Control
 					return nil, status.Errorf(codes.Internal, "Could not detach volume %s from node %s: %v", diskURI, derr.CurrentNode, err)
 				}
 				klog.V(2).Infof("Trying to attach volume %s to node %s again", diskURI, nodeName)
-				lun, err = d.cloud.AttachDisk(ctx, true, diskName, diskURI, nodeName, cachingMode, disk)
+				lun, err = d.cloud.AttachDisk(ctx, true, diskName, diskURI, nodeName, cachingMode, disk, nil)
 			}
 			if err != nil {
 				klog.Errorf("Attach volume %s to instance %s failed with %v", diskURI, nodeName, err)
@@ -460,8 +460,8 @@ func (d *DriverV2) ValidateVolumeCapabilities(ctx context.Context, req *csi.Vali
 		return nil, status.Error(codes.InvalidArgument, "MaxShares value not supported")
 	}
 
-	if !azureutils.IsValidVolumeCapabilities(volumeCapabilities, maxShares) {
-		return &csi.ValidateVolumeCapabilitiesResponse{Message: "VolumeCapabilities are invalid"}, nil
+	if err := azureutils.IsValidVolumeCapabilities(volumeCapabilities, maxShares); err != nil {
+		return &csi.ValidateVolumeCapabilitiesResponse{Message: err.Error()}, nil
 	}
 
 	if _, err := d.checkDiskExists(ctx, diskURI); err != nil {
@@ -839,6 +839,9 @@ func (d *DriverV2) CreateSnapshot(ctx context.Context, req *csi.CreateSnapshotRe
 
 		azureutils.SleepIfThrottled(rerr.Error(), consts.SnapshotOpThrottlingSleepSec)
 		return nil, status.Error(codes.Internal, fmt.Sprintf("create snapshot error: %v", rerr.Error()))
+	}
+	if err := d.waitForSnapshotReady(ctx, subsID, resourceGroup, snapshotName, waitForSnapshotReadyInterval, waitForSnapshotReadyTimeout); err != nil {
+		return nil, status.Error(codes.Internal, fmt.Sprintf("waitForSnapshotReady(%s, %s, %s) failed with %v", subsID, resourceGroup, snapshotName, err))
 	}
 	klog.V(2).Infof("create snapshot(%s) under rg(%s) successfully", snapshotName, resourceGroup)
 
