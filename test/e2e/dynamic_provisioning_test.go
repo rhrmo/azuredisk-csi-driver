@@ -747,6 +747,7 @@ func (t *dynamicProvisioningTestSuite) defineTests(isMultiZone bool) {
 			CSIDriver:              testDriver,
 			Pod:                    pod,
 			ShouldOverwrite:        false,
+			IsWindowsHPCDeployment: isWindowsHPCDeployment,
 			PodWithSnapshot:        podWithSnapshot,
 			StorageClassParameters: map[string]string{"skuName": "StandardSSD_LRS"},
 			SnapshotStorageClassParameters: map[string]string{
@@ -975,7 +976,7 @@ func (t *dynamicProvisioningTestSuite) defineTests(isMultiZone bool) {
 
 	ginkgo.It("should create a volume on demand and dynamically resize it without detaching [disk.csi.azure.com] ", func(ctx ginkgo.SpecContext) {
 		skipIfUsingInTreeVolumePlugin()
-		skipIfNotDynamicallyResizeSuported()
+
 		//Subscription must be registered for LiveResize
 		volume := testsuites.VolumeDetails{
 			ClaimSize: "10Gi",
@@ -1015,7 +1016,7 @@ func (t *dynamicProvisioningTestSuite) defineTests(isMultiZone bool) {
 
 	ginkgo.It("should create a block volume on demand and dynamically resize it without detaching [disk.csi.azure.com] ", func(ctx ginkgo.SpecContext) {
 		skipIfUsingInTreeVolumePlugin()
-		skipIfNotDynamicallyResizeSuported()
+
 		//Subscription must be registered for LiveResize
 		volume := testsuites.VolumeDetails{
 			ClaimSize: "10Gi",
