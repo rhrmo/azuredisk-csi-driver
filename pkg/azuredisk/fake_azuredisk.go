@@ -18,13 +18,14 @@ package azuredisk
 
 import (
 	"context"
+	"testing"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v5"
+	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2022-08-01/compute"
 	"github.com/container-storage-interface/spec/lib/go/csi"
-	"go.uber.org/mock/gomock"
+	"github.com/golang/mock/gomock"
+	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/mount-utils"
 	testingexec "k8s.io/utils/exec/testing"
 
@@ -34,7 +35,6 @@ import (
 	"sigs.k8s.io/azuredisk-csi-driver/pkg/optimization"
 	"sigs.k8s.io/azuredisk-csi-driver/pkg/optimization/mockoptimization"
 	volumehelper "sigs.k8s.io/azuredisk-csi-driver/pkg/util"
-	"sigs.k8s.io/cloud-provider-azure/pkg/azclient"
 	azcache "sigs.k8s.io/cloud-provider-azure/pkg/cache"
 	azure "sigs.k8s.io/cloud-provider-azure/pkg/provider"
 )
@@ -67,7 +67,7 @@ var (
 type FakeDriver interface {
 	CSIDriver
 
-	GetSourceDiskSize(ctx context.Context, subsID, resourceGroup, diskName string, curDepth, maxDepth int) (*int32, *armcompute.Disk, error)
+	GetSourceDiskSize(ctx context.Context, subsID, resourceGroup, diskName string, curDepth, maxDepth int) (*int32, error)
 
 	setNextCommandOutputScripts(scripts ...testingexec.FakeAction)
 
@@ -79,7 +79,6 @@ type FakeDriver interface {
 	setVersion(version string)
 	getCloud() *azure.Cloud
 	setCloud(*azure.Cloud)
-	getClientFactory() azclient.ClientFactory
 	getMounter() *mount.SafeFormatAndMount
 	setMounter(*mount.SafeFormatAndMount)
 	setPerfOptimizationEnabled(bool)
@@ -87,7 +86,7 @@ type FakeDriver interface {
 	getHostUtil() hostUtil
 
 	checkDiskCapacity(context.Context, string, string, string, int) (bool, error)
-	checkDiskExists(ctx context.Context, diskURI string) (*armcompute.Disk, error)
+	checkDiskExists(ctx context.Context, diskURI string) (*compute.Disk, error)
 	getSnapshotInfo(string) (string, string, string, error)
 	waitForSnapshotReady(context.Context, string, string, string, time.Duration, time.Duration) error
 	getSnapshotByID(context.Context, string, string, string, string) (*csi.Snapshot, error)
@@ -103,7 +102,7 @@ type fakeDriverV1 struct {
 	Driver
 }
 
-func newFakeDriverV1(ctrl *gomock.Controller) (*fakeDriverV1, error) {
+func newFakeDriverV1(t *testing.T) (*fakeDriverV1, error) {
 	driver := fakeDriverV1{}
 	driver.Name = fakeDriverName
 	driver.Version = fakeDriverVersion
@@ -117,14 +116,11 @@ func newFakeDriverV1(ctrl *gomock.Controller) (*fakeDriverV1, error) {
 	driver.useCSIProxyGAInterface = true
 	driver.allowEmptyCloudConfig = true
 	driver.shouldWaitForSnapshotReady = true
-	driver.endpoint = "tcp://127.0.0.1:0"
-	driver.disableAVSetNodes = true
-	driver.kubeClient = fake.NewSimpleClientset()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
 
 	driver.cloud = azure.GetTestCloud(ctrl)
-	driver.diskController = NewManagedDiskController(driver.cloud)
-	driver.clientFactory = driver.cloud.ComputeClientFactory
-
 	mounter, err := mounter.NewSafeMounter(driver.enableWindowsHostProcess, driver.useCSIProxyGAInterface)
 	if err != nil {
 		return nil, err
@@ -132,7 +128,7 @@ func newFakeDriverV1(ctrl *gomock.Controller) (*fakeDriverV1, error) {
 
 	driver.mounter = mounter
 
-	cache, err := azcache.NewTimedCache(time.Minute, func(key string) (interface{}, error) {
+	cache, err := azcache.NewTimedCache(time.Minute, func(_ string) (interface{}, error) {
 		return nil, nil
 	}, false)
 	if err != nil {
@@ -152,13 +148,17 @@ func newFakeDriverV1(ctrl *gomock.Controller) (*fakeDriverV1, error) {
 			csi.ControllerServiceCapability_RPC_EXPAND_VOLUME,
 			csi.ControllerServiceCapability_RPC_LIST_VOLUMES,
 			csi.ControllerServiceCapability_RPC_LIST_VOLUMES_PUBLISHED_NODES,
-			csi.ControllerServiceCapability_RPC_MODIFY_VOLUME,
 		})
 	driver.AddVolumeCapabilityAccessModes([]csi.VolumeCapability_AccessMode_Mode{csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER})
 	driver.AddNodeServiceCapabilities([]csi.NodeServiceCapability_RPC_Type{
 		csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME,
 		csi.NodeServiceCapability_RPC_EXPAND_VOLUME,
 	})
+
+	nodeInfo := driver.getNodeInfo()
+	assert.NotEqual(t, nil, nodeInfo)
+	dh := driver.getDeviceHelper()
+	assert.NotEqual(t, nil, dh)
 
 	return &driver, nil
 }
@@ -169,9 +169,6 @@ func (d *fakeDriverV1) setNextCommandOutputScripts(scripts ...testingexec.FakeAc
 
 func (d *fakeDriverV1) setThrottlingCache(key string, value string) {
 	d.throttlingCache.Set(key, value)
-}
-func (d *fakeDriverV1) getClientFactory() azclient.ClientFactory {
-	return d.clientFactory
 }
 
 func createVolumeCapabilities(accessMode csi.VolumeCapability_AccessMode_Mode) []*csi.VolumeCapability {

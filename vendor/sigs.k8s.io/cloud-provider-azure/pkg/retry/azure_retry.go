@@ -20,6 +20,7 @@ import (
 	"html"
 	"math/rand"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Azure/go-autorest/autorest"
@@ -85,6 +86,21 @@ func (b *Backoff) WithRetriableHTTPStatusCodes(httpStatusCodes []int) *Backoff {
 	return &newBackoff
 }
 
+// isNonRetriableError returns true if the Error is one of NonRetriableErrors.
+func (b *Backoff) isNonRetriableError(rerr *Error) bool {
+	if rerr == nil {
+		return false
+	}
+
+	for _, err := range b.NonRetriableErrors {
+		if strings.Contains(rerr.RawError.Error(), err) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // Step (1) returns an amount of time to sleep determined by the
 // original Duration and Jitter and (2) mutates the provided Backoff
 // to update its Steps and Duration.
@@ -145,7 +161,7 @@ func doBackoffRetry(s autorest.Sender, r *http.Request, backoff Backoff) (resp *
 	for backoff.Steps > 0 {
 		err = rr.Prepare()
 		if err != nil {
-			return resp, err
+			return
 		}
 		resp, err = s.Do(rr.Request())
 		rerr := GetError(resp, err)

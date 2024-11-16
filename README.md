@@ -4,7 +4,6 @@
 ![windows build status](https://github.com/kubernetes-sigs/azuredisk-csi-driver/actions/workflows/windows.yml/badge.svg)
 [![Coverage Status](https://coveralls.io/repos/github/kubernetes-sigs/azuredisk-csi-driver/badge.svg?branch=master)](https://coveralls.io/github/kubernetes-sigs/azuredisk-csi-driver?branch=master)
 [![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fkubernetes-sigs%2Fazuredisk-csi-driver.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Fkubernetes-sigs%2Fazuredisk-csi-driver?ref=badge_shield)
-[![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/azuredisk-csi-driver)](https://artifacthub.io/packages/search?repo=azuredisk-csi-driver)
 
 ### About
 This driver allows Kubernetes to access [Azure Disk](https://azure.microsoft.com/en-us/services/storage/disks/) volume, csi plugin name: `disk.csi.azure.com`, supported accessModes: `ReadWriteOnce`
@@ -24,9 +23,9 @@ V2: Preview
 |Driver Version  |Image                                                      | supported k8s version |
 |----------------|-----------------------------------------------------------|-----------------------|
 |`master` branch |mcr.microsoft.com/k8s/csi/azuredisk-csi:latest             | 1.21+                 |
-|v1.30.4         |mcr.microsoft.com/oss/kubernetes-csi/azuredisk-csi:v1.30.4 | 1.21+                 |
-|v1.29.2         |mcr.microsoft.com/oss/kubernetes-csi/azuredisk-csi:v1.29.2 | 1.21+                 |
-|v1.28.5         |mcr.microsoft.com/oss/kubernetes-csi/azuredisk-csi:v1.28.5 | 1.21+                 |
+|v1.29.11         |mcr.microsoft.com/oss/kubernetes-csi/azuredisk-csi:v1.29.11 | 1.21+                 |
+|v1.28.3         |mcr.microsoft.com/oss/kubernetes-csi/azuredisk-csi:v1.28.3 | 1.21+                 |
+|v1.27.1         |mcr.microsoft.com/oss/kubernetes-csi/azuredisk-csi:v1.27.1 | 1.21+                 |
 
 #### V2
 

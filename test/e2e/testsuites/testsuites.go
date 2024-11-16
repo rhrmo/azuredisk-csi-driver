@@ -51,7 +51,7 @@ import (
 	e2epv "k8s.io/kubernetes/test/e2e/framework/pv"
 	testutil "k8s.io/kubernetes/test/utils"
 	imageutils "k8s.io/kubernetes/test/utils/image"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 
 	"sigs.k8s.io/azuredisk-csi-driver/pkg/azuredisk"
 	"sigs.k8s.io/azuredisk-csi-driver/pkg/azureutils"
@@ -336,7 +336,7 @@ func generatePVC(namespace, storageClassName, name, claimSize string, volumeMode
 			AccessModes: []v1.PersistentVolumeAccessMode{
 				accessMode,
 			},
-			Resources: v1.VolumeResourceRequirements{
+			Resources: v1.ResourceRequirements{
 				Requests: v1.ResourceList{
 					v1.ResourceName(v1.ResourceStorage): resource.MustParse(claimSize),
 				},
@@ -794,7 +794,7 @@ func NewTestPod(c clientset.Interface, ns *v1.Namespace, command string, isWindo
 				},
 				RestartPolicy:                v1.RestartPolicyNever,
 				Volumes:                      make([]v1.Volume, 0),
-				AutomountServiceAccountToken: pointer.Bool(false),
+				AutomountServiceAccountToken: ptr.To(false),
 			},
 		},
 	}

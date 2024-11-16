@@ -93,10 +93,9 @@ func (c *Client) CreateFileShare(ctx context.Context, resourceGroupName, account
 	if shareOptions == nil {
 		return storage.FileShare{}, fmt.Errorf("share options is nil")
 	}
-	fileShareProperties := &storage.FileShareProperties{}
-	if shareOptions.RequestGiB > 0 {
-		quota := int32(shareOptions.RequestGiB)
-		fileShareProperties.ShareQuota = &quota
+	quota := int32(shareOptions.RequestGiB)
+	fileShareProperties := &storage.FileShareProperties{
+		ShareQuota: &quota,
 	}
 	if shareOptions.Protocol == storage.EnabledProtocolsNFS {
 		fileShareProperties.EnabledProtocols = shareOptions.Protocol

@@ -35,6 +35,12 @@ import (
 var _ cloudprovider.Instances = (*Cloud)(nil)
 
 const (
+	vmPowerStatePrefix       = "PowerState/"
+	vmPowerStateStopped      = "stopped"
+	vmPowerStateDeallocated  = "deallocated"
+	vmPowerStateDeallocating = "deallocating"
+	vmPowerStateUnknown      = "unknown"
+
 	// nodeNameEnvironmentName is the environment variable name for getting node name.
 	// It is only used for out-of-tree cloud provider.
 	nodeNameEnvironmentName = "NODE_NAME"
@@ -65,7 +71,7 @@ func (az *Cloud) addressGetter(nodeName types.NodeName) ([]v1.NodeAddress, error
 }
 
 // NodeAddresses returns the addresses of the specified instance.
-func (az *Cloud) NodeAddresses(_ context.Context, name types.NodeName) ([]v1.NodeAddress, error) {
+func (az *Cloud) NodeAddresses(ctx context.Context, name types.NodeName) ([]v1.NodeAddress, error) {
 	// Returns nil for unmanaged nodes because azure cloud provider couldn't fetch information for them.
 	unmanaged, err := az.IsNodeUnmanaged(string(name))
 	if err != nil {
@@ -217,7 +223,7 @@ func (az *Cloud) InstanceExistsByProviderID(ctx context.Context, providerID stri
 }
 
 // InstanceShutdownByProviderID returns true if the instance is in safe state to detach volumes
-func (az *Cloud) InstanceShutdownByProviderID(_ context.Context, providerID string) (bool, error) {
+func (az *Cloud) InstanceShutdownByProviderID(ctx context.Context, providerID string) (bool, error) {
 	if providerID == "" {
 		return false, nil
 	}
@@ -260,7 +266,7 @@ func (az *Cloud) InstanceShutdownByProviderID(_ context.Context, providerID stri
 
 	status := strings.ToLower(powerStatus)
 	provisioningSucceeded := strings.EqualFold(strings.ToLower(provisioningState), strings.ToLower(string(consts.ProvisioningStateSucceeded)))
-	return provisioningSucceeded && (status == consts.VMPowerStateStopped || status == consts.VMPowerStateDeallocated || status == consts.VMPowerStateDeallocating), nil
+	return provisioningSucceeded && (status == vmPowerStateStopped || status == vmPowerStateDeallocated || status == vmPowerStateDeallocating), nil
 }
 
 func (az *Cloud) isCurrentInstance(name types.NodeName, metadataVMName string) (bool, error) {
@@ -287,7 +293,7 @@ func (az *Cloud) isCurrentInstance(name types.NodeName, metadataVMName string) (
 
 // InstanceID returns the cloud provider ID of the specified instance.
 // Note that if the instance does not exist or is no longer running, we must return ("", cloudprovider.InstanceNotFound)
-func (az *Cloud) InstanceID(_ context.Context, name types.NodeName) (string, error) {
+func (az *Cloud) InstanceID(ctx context.Context, name types.NodeName) (string, error) {
 	nodeName := mapNodeNameToVMName(name)
 	unmanaged, err := az.IsNodeUnmanaged(nodeName)
 	if err != nil {
@@ -329,7 +335,7 @@ func (az *Cloud) InstanceID(_ context.Context, name types.NodeName) (string, err
 	return az.VMSet.GetInstanceIDByNodeName(nodeName)
 }
 
-func (az *Cloud) getLocalInstanceProviderID(metadata *InstanceMetadata, _ string) (string, error) {
+func (az *Cloud) getLocalInstanceProviderID(metadata *InstanceMetadata, nodeName string) (string, error) {
 	// Get resource group name and subscription ID.
 	resourceGroup := strings.ToLower(metadata.Compute.ResourceGroup)
 	subscriptionID := strings.ToLower(metadata.Compute.SubscriptionID)
@@ -377,7 +383,7 @@ func (az *Cloud) InstanceTypeByProviderID(ctx context.Context, providerID string
 // Note that if the instance does not exist or is no longer running, we must return ("", cloudprovider.InstanceNotFound)
 // (Implementer Note): This is used by kubelet. Kubelet will label the node. Real log from kubelet:
 // Adding node label from cloud provider: beta.kubernetes.io/instance-type=[value]
-func (az *Cloud) InstanceType(_ context.Context, name types.NodeName) (string, error) {
+func (az *Cloud) InstanceType(ctx context.Context, name types.NodeName) (string, error) {
 	// Returns "" for unmanaged nodes because azure cloud provider couldn't fetch information for them.
 	unmanaged, err := az.IsNodeUnmanaged(string(name))
 	if err != nil {
@@ -426,13 +432,13 @@ func (az *Cloud) InstanceType(_ context.Context, name types.NodeName) (string, e
 
 // AddSSHKeyToAllInstances adds an SSH public key as a legal identity for all instances
 // expected format for the key is standard ssh-keygen format: <protocol> <blob>
-func (az *Cloud) AddSSHKeyToAllInstances(_ context.Context, _ string, _ []byte) error {
+func (az *Cloud) AddSSHKeyToAllInstances(ctx context.Context, user string, keyData []byte) error {
 	return cloudprovider.NotImplemented
 }
 
 // CurrentNodeName returns the name of the node we are currently running on.
 // On Azure this is the hostname, so we just return the hostname.
-func (az *Cloud) CurrentNodeName(_ context.Context, hostname string) (types.NodeName, error) {
+func (az *Cloud) CurrentNodeName(ctx context.Context, hostname string) (types.NodeName, error) {
 	return types.NodeName(hostname), nil
 }
 

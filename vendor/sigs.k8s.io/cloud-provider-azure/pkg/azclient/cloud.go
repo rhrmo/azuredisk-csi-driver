@@ -77,14 +77,6 @@ func AzureCloudConfigFromURL(endpoint string) (*cloud.Configuration, error) {
 	}
 
 	if len(metadata) > 0 {
-		// We use the endpoint to build our config, but on ASH the config returned
-		// does not contain the endpoint, and this is not accounted for. This
-		// ultimately unsets it for the returned config, causing the bootstrap of
-		// the provider to fail. Instead, check if the endpoint is returned, and if
-		// it is not then set it.
-		if len(metadata[0].ResourceManager) == 0 {
-			metadata[0].ResourceManager = endpoint
-		}
 		return &cloud.Configuration{
 			ActiveDirectoryAuthorityHost: metadata[0].Authentication.LoginEndpoint,
 			Services: map[cloud.ServiceName]cloud.ServiceConfiguration{
@@ -126,16 +118,21 @@ func AzureCloudConfigOverrideFromEnv(config *cloud.Configuration) (*cloud.Config
 	return config, nil
 }
 
-// GetAzureCloudConfig returns the cloud configuration for the given ARMClientConfig.
 func GetAzureCloudConfig(armConfig *ARMClientConfig) (*cloud.Configuration, error) {
+	var config *cloud.Configuration
+	var err error
 	if armConfig == nil {
-		return &cloud.AzurePublic, nil
+		config = &cloud.AzurePublic
+	} else {
+		config = AzureCloudConfigFromName(armConfig.Cloud)
+		if armConfig.ResourceManagerEndpoint != "" {
+			config, err = AzureCloudConfigFromURL(armConfig.ResourceManagerEndpoint)
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
-	if armConfig.ResourceManagerEndpoint != "" {
-		return AzureCloudConfigFromURL(armConfig.ResourceManagerEndpoint)
-	}
-
-	return AzureCloudConfigOverrideFromEnv(AzureCloudConfigFromName(armConfig.Cloud))
+	return AzureCloudConfigOverrideFromEnv(config)
 }
 
 // Environment represents a set of endpoints for each of Azure's Clouds.

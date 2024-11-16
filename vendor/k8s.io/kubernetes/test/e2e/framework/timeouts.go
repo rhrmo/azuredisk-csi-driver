@@ -39,7 +39,6 @@ var defaultTimeouts = TimeoutContext{
 	SystemPodsStartup:         10 * time.Minute,
 	NodeSchedulable:           30 * time.Minute,
 	SystemDaemonsetStartup:    5 * time.Minute,
-	NodeNotReady:              3 * time.Minute,
 }
 
 // TimeoutContext contains timeout settings for several actions.
@@ -107,9 +106,6 @@ type TimeoutContext struct {
 
 	// SystemDaemonsetStartup is how long to wait for all system daemonsets to be ready.
 	SystemDaemonsetStartup time.Duration
-
-	// NodeNotReady is how long to wait for a node to be not ready.
-	NodeNotReady time.Duration
 }
 
 // NewTimeoutContext returns a TimeoutContext with all values set either to

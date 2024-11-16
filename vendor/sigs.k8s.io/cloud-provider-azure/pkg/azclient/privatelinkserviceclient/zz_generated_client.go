@@ -22,8 +22,6 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/arm"
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore/tracing"
 	armnetwork "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/network/armnetwork/v4"
 
 	"sigs.k8s.io/cloud-provider-azure/pkg/azclient/utils"
@@ -31,28 +29,19 @@ import (
 
 type Client struct {
 	*armnetwork.PrivateLinkServicesClient
-	subscriptionID string
-	tracer         tracing.Tracer
 }
 
 func New(subscriptionID string, credential azcore.TokenCredential, options *arm.ClientOptions) (Interface, error) {
 	if options == nil {
 		options = utils.GetDefaultOption()
 	}
-	tr := options.TracingProvider.NewTracer(utils.ModuleName, utils.ModuleVersion)
 
 	client, err := armnetwork.NewPrivateLinkServicesClient(subscriptionID, credential, options)
 	if err != nil {
 		return nil, err
 	}
-	return &Client{
-		PrivateLinkServicesClient: client,
-		subscriptionID:            subscriptionID,
-		tracer:                    tr,
-	}, nil
+	return &Client{client}, nil
 }
-
-const GetOperationName = "PrivateLinkServicesClient.Get"
 
 // Get gets the PrivateLinkService
 func (client *Client) Get(ctx context.Context, resourceGroupName string, resourceName string, expand *string) (result *armnetwork.PrivateLinkService, rerr error) {
@@ -60,12 +49,6 @@ func (client *Client) Get(ctx context.Context, resourceGroupName string, resourc
 	if expand != nil {
 		ops = &armnetwork.PrivateLinkServicesClientGetOptions{Expand: expand}
 	}
-	ctx = utils.ContextWithClientName(ctx, "PrivateLinkServicesClient")
-	ctx = utils.ContextWithRequestMethod(ctx, "Get")
-	ctx = utils.ContextWithResourceGroupName(ctx, resourceGroupName)
-	ctx = utils.ContextWithSubscriptionID(ctx, client.subscriptionID)
-	ctx, endSpan := runtime.StartSpan(ctx, GetOperationName, client.tracer, nil)
-	defer endSpan(rerr)
 	resp, err := client.PrivateLinkServicesClient.Get(ctx, resourceGroupName, resourceName, ops)
 	if err != nil {
 		return nil, err
@@ -74,16 +57,8 @@ func (client *Client) Get(ctx context.Context, resourceGroupName string, resourc
 	return &resp.PrivateLinkService, nil
 }
 
-const CreateOrUpdateOperationName = "PrivateLinkServicesClient.Create"
-
 // CreateOrUpdate creates or updates a PrivateLinkService.
-func (client *Client) CreateOrUpdate(ctx context.Context, resourceGroupName string, resourceName string, resource armnetwork.PrivateLinkService) (result *armnetwork.PrivateLinkService, err error) {
-	ctx = utils.ContextWithClientName(ctx, "PrivateLinkServicesClient")
-	ctx = utils.ContextWithRequestMethod(ctx, "CreateOrUpdate")
-	ctx = utils.ContextWithResourceGroupName(ctx, resourceGroupName)
-	ctx = utils.ContextWithSubscriptionID(ctx, client.subscriptionID)
-	ctx, endSpan := runtime.StartSpan(ctx, CreateOrUpdateOperationName, client.tracer, nil)
-	defer endSpan(err)
+func (client *Client) CreateOrUpdate(ctx context.Context, resourceGroupName string, resourceName string, resource armnetwork.PrivateLinkService) (*armnetwork.PrivateLinkService, error) {
 	resp, err := utils.NewPollerWrapper(client.PrivateLinkServicesClient.BeginCreateOrUpdate(ctx, resourceGroupName, resourceName, resource, nil)).WaitforPollerResp(ctx)
 	if err != nil {
 		return nil, err
@@ -94,30 +69,14 @@ func (client *Client) CreateOrUpdate(ctx context.Context, resourceGroupName stri
 	return nil, nil
 }
 
-const DeleteOperationName = "PrivateLinkServicesClient.Delete"
-
 // Delete deletes a PrivateLinkService by name.
-func (client *Client) Delete(ctx context.Context, resourceGroupName string, resourceName string) (err error) {
-	ctx = utils.ContextWithClientName(ctx, "PrivateLinkServicesClient")
-	ctx = utils.ContextWithRequestMethod(ctx, "Delete")
-	ctx = utils.ContextWithResourceGroupName(ctx, resourceGroupName)
-	ctx = utils.ContextWithSubscriptionID(ctx, client.subscriptionID)
-	ctx, endSpan := runtime.StartSpan(ctx, DeleteOperationName, client.tracer, nil)
-	defer endSpan(err)
-	_, err = utils.NewPollerWrapper(client.BeginDelete(ctx, resourceGroupName, resourceName, nil)).WaitforPollerResp(ctx)
+func (client *Client) Delete(ctx context.Context, resourceGroupName string, resourceName string) error {
+	_, err := utils.NewPollerWrapper(client.BeginDelete(ctx, resourceGroupName, resourceName, nil)).WaitforPollerResp(ctx)
 	return err
 }
 
-const ListOperationName = "PrivateLinkServicesClient.List"
-
 // List gets a list of PrivateLinkService in the resource group.
 func (client *Client) List(ctx context.Context, resourceGroupName string) (result []*armnetwork.PrivateLinkService, rerr error) {
-	ctx = utils.ContextWithClientName(ctx, "PrivateLinkServicesClient")
-	ctx = utils.ContextWithRequestMethod(ctx, "List")
-	ctx = utils.ContextWithResourceGroupName(ctx, resourceGroupName)
-	ctx = utils.ContextWithSubscriptionID(ctx, client.subscriptionID)
-	ctx, endSpan := runtime.StartSpan(ctx, ListOperationName, client.tracer, nil)
-	defer endSpan(rerr)
 	pager := client.PrivateLinkServicesClient.NewListPager(resourceGroupName, nil)
 	for pager.More() {
 		nextResult, err := pager.NextPage(ctx)

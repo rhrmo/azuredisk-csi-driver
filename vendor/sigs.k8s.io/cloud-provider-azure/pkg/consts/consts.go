@@ -113,8 +113,8 @@ const (
 	// StrRawVersion is the raw version string
 	StrRawVersion string = "raw"
 
-	// ProvisionStateDeleting indicates VMSS instances are in Deleting state.
-	ProvisionStateDeleting = "Deleting"
+	// VirtualMachineScaleSetsDeallocating indicates VMSS instances are in Deallocating state.
+	VirtualMachineScaleSetsDeallocating = "Deallocating"
 	// VmssMachineIDTemplate is the vmss manchine ID template
 	VmssMachineIDTemplate = "/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Compute/virtualMachineScaleSets/%s/virtualMachines/%s"
 	// VMSetCIDRIPV4TagKey specifies the node ipv4 CIDR mask of the instances on the VMSS or VMAS
@@ -132,8 +132,6 @@ const (
 	ProvisioningStateDeleting = "Deleting"
 	// ProvisioningStateSucceeded ...
 	ProvisioningStateSucceeded = "Succeeded"
-	// ProvisioningStateUnknown is the unknown provisioning state
-	ProvisioningStateUnknown = "Unknown"
 )
 
 // cache
@@ -379,8 +377,6 @@ const (
 	FrontendIPConfigNameMaxLength = 80
 	// LoadBalancerRuleNameMaxLength is the max length of the load balancing rule
 	LoadBalancerRuleNameMaxLength = 80
-	// PIPPrefixNameMaxLength is the max length of the PIP prefix name
-	PIPPrefixNameMaxLength = 80
 	// IPFamilySuffixLength is the length of suffix length of IP family ("-IPv4", "-IPv6")
 	IPFamilySuffixLength = 5
 
@@ -405,8 +401,6 @@ const (
 	ReferencedResourceNotProvisionedMessageCode = "ReferencedResourceNotProvisioned"
 	// ParentResourceNotFoundMessageCode is the error code that the parent VMSS of the VM is not found.
 	ParentResourceNotFoundMessageCode = "ParentResourceNotFound"
-	// ResourceNotFoundMessageCode is the error code that the resource is not found.
-	ResourceNotFoundMessageCode = "ResourceNotFound"
 	// ConcurrentRequestConflictMessage is the error message that the request failed due to the conflict with another concurrent operation.
 	ConcurrentRequestConflictMessage = "The request failed due to conflict with a concurrent request."
 	// CannotUpdateVMBeingDeletedMessagePrefix is the prefix of the error message that the request failed due to delete a VM that is being deleted
@@ -575,14 +569,4 @@ const (
 	ClusterServiceLoadBalancerHealthProbeDefaultPort         = 10256
 	ClusterServiceLoadBalancerHealthProbeDefaultPath         = "/healthz"
 	SharedProbeName                                          = "cluster-service-shared-health-probe"
-)
-
-// VM power state
-const (
-	VMPowerStatePrefix       = "PowerState/"
-	VMPowerStateStopped      = "stopped"
-	VMPowerStateStopping     = "stopping"
-	VMPowerStateDeallocated  = "deallocated"
-	VMPowerStateDeallocating = "deallocating"
-	VMPowerStateUnknown      = "unknown"
 )

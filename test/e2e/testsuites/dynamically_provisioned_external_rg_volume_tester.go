@@ -27,7 +27,7 @@ import (
 	"sigs.k8s.io/azuredisk-csi-driver/test/utils/credentials"
 
 	"github.com/onsi/ginkgo/v2"
-	"k8s.io/apimachinery/pkg/util/uuid"
+	"github.com/pborman/uuid"
 
 	v1 "k8s.io/api/core/v1"
 	clientset "k8s.io/client-go/kubernetes"
@@ -79,7 +79,7 @@ func (t *DynamicallyProvisionedExternalRgVolumeTest) Run(ctx context.Context, cl
 
 		if t.SeparateResourceGroups || externalRG == "" {
 			//create external resource group
-			externalRG = credentials.ResourceGroupPrefix + string(uuid.NewUUID())
+			externalRG = credentials.ResourceGroupPrefix + uuid.NewUUID().String()
 			ginkgo.By("Creating external resource group: " + externalRG)
 			_, err = azureClient.EnsureResourceGroup(ctx, externalRG, creds.Location, nil)
 			framework.ExpectNoError(err)

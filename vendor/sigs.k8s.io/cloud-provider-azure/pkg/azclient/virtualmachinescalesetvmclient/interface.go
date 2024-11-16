@@ -20,7 +20,6 @@ package virtualmachinescalesetvmclient
 import (
 	"context"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
 	armcompute "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v5"
 
 	"sigs.k8s.io/cloud-provider-azure/pkg/azclient/utils"
@@ -31,10 +30,6 @@ type Interface interface {
 	utils.SubResourceGetFunc[armcompute.VirtualMachineScaleSetVM]
 	utils.SubResourceDeleteFunc[armcompute.VirtualMachineScaleSetVM]
 	utils.SubResourceListFunc[armcompute.VirtualMachineScaleSetVM]
-	ListVMInstanceView(ctx context.Context, resourceGroupName string, parentResourceName string) (result []*armcompute.VirtualMachineScaleSetVM, rerr error)
-
 	// Update updates a VirtualMachineScaleSetVM.
 	Update(ctx context.Context, resourceGroupName string, VMScaleSetName string, instanceID string, parameters armcompute.VirtualMachineScaleSetVM) (*armcompute.VirtualMachineScaleSetVM, error)
-	GetInstanceView(ctx context.Context, resourceGroupName string, vmScaleSetName string, instanceID string) (*armcompute.VirtualMachineScaleSetVMInstanceView, error)
-	BeginUpdate(ctx context.Context, resourceGroupName string, vmScaleSetName string, instanceID string, parameters armcompute.VirtualMachineScaleSetVM, options *armcompute.VirtualMachineScaleSetVMsClientBeginUpdateOptions) (*runtime.Poller[armcompute.VirtualMachineScaleSetVMsClientUpdateResponse], error)
 }

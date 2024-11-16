@@ -14,7 +14,6 @@ spec:
       volumeMounts:
         - mountPath: "/mnt/azuredisk"
           name: azuredisk01
-          readOnly: false
   volumes:
     - name: azuredisk01
       ephemeral:

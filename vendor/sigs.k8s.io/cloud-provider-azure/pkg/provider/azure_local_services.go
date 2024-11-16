@@ -38,7 +38,6 @@ import (
 
 	"sigs.k8s.io/cloud-provider-azure/pkg/consts"
 	"sigs.k8s.io/cloud-provider-azure/pkg/retry"
-	utilsets "sigs.k8s.io/cloud-provider-azure/pkg/util/sets"
 )
 
 // batchProcessor collects operations in a certain interval and then processes them in batches.
@@ -330,11 +329,11 @@ func (az *Cloud) setUpEndpointSlicesInformer(informerFactory informers.SharedInf
 				}
 				for _, previousNodeName := range previousNodeNames {
 					nodeIPsSet := az.nodePrivateIPs[strings.ToLower(previousNodeName)]
-					previousIPs = append(previousIPs, nodeIPsSet.UnsortedList()...)
+					previousIPs = append(previousIPs, setToStrings(nodeIPsSet)...)
 				}
 				for _, currentNodeName := range currentNodeNames {
 					nodeIPsSet := az.nodePrivateIPs[strings.ToLower(currentNodeName)]
-					currentIPs = append(currentIPs, nodeIPsSet.UnsortedList()...)
+					currentIPs = append(currentIPs, setToStrings(nodeIPsSet)...)
 				}
 
 				if az.backendPoolUpdater != nil {
@@ -463,7 +462,7 @@ func newServiceInfo(ipFamily, lbName string) *serviceInfo {
 }
 
 // getLocalServiceEndpointsNodeNames gets the node names that host all endpoints of the local service.
-func (az *Cloud) getLocalServiceEndpointsNodeNames(service *v1.Service) (*utilsets.IgnoreCaseSet, error) {
+func (az *Cloud) getLocalServiceEndpointsNodeNames(service *v1.Service) (sets.Set[string], error) {
 	var (
 		ep           *discovery_v1.EndpointSlice
 		foundInCache bool
@@ -506,7 +505,7 @@ func (az *Cloud) getLocalServiceEndpointsNodeNames(service *v1.Service) (*utilse
 		nodeNames = append(nodeNames, pointer.StringDeref(endpoint.NodeName, ""))
 	}
 
-	return utilsets.NewString(nodeNames...), nil
+	return sets.New[string](nodeNames...), nil
 }
 
 // cleanupLocalServiceBackendPool cleans up the backend pool of
@@ -554,9 +553,11 @@ func (az *Cloud) checkAndApplyLocalServiceBackendPoolUpdates(lb network.LoadBala
 		return err
 	}
 	var expectedIPs []string
-	for _, nodeName := range endpointsNodeNames.UnsortedList() {
+	for nodeName := range endpointsNodeNames {
 		ips := az.nodePrivateIPs[strings.ToLower(nodeName)]
-		expectedIPs = append(expectedIPs, ips.UnsortedList()...)
+		for ip := range ips {
+			expectedIPs = append(expectedIPs, ip)
+		}
 	}
 	currentIPsInBackendPools := make(map[string][]string)
 	for _, bp := range *lb.BackendAddressPools {

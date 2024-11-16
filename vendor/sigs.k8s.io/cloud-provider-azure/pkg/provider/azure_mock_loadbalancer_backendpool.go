@@ -20,7 +20,7 @@ import (
 	reflect "reflect"
 
 	network "github.com/Azure/azure-sdk-for-go/services/network/mgmt/2022-07-01/network"
-	gomock "go.uber.org/mock/gomock"
+	gomock "github.com/golang/mock/gomock"
 	v1 "k8s.io/api/core/v1"
 )
 

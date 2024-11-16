@@ -19,7 +19,7 @@ REGISTRY_NAME ?= $(shell echo $(REGISTRY) | sed "s/.azurecr.io//g")
 IMAGE_NAME ?= azuredisk-csi
 ifneq ($(BUILD_V2), true)
 PLUGIN_NAME = azurediskplugin
-IMAGE_VERSION ?= v1.30.4
+IMAGE_VERSION ?= v1.29.11
 CHART_VERSION ?= latest
 else
 PLUGIN_NAME = azurediskpluginv2
@@ -110,6 +110,14 @@ sanity-test: azuredisk
 .PHONY: sanity-test-v2
 sanity-test-v2: azuredisk-v2
 	go test -v -timeout=30m ./test/sanity --temp-use-driver-v2
+
+.PHONY: integration-test
+integration-test: azuredisk
+	go test -v -timeout=30m ./test/integration
+
+.PHONY: integration-test-v2
+integration-test-v2: azuredisk-v2
+	go test -v -timeout=30m ./test/integration --temp-use-driver-v2
 
 .PHONY: e2e-bootstrap
 e2e-bootstrap: install-helm

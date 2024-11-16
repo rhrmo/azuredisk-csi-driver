@@ -255,7 +255,7 @@ func (d *DriverV2) NodePublishVolume(ctx context.Context, req *csi.NodePublishVo
 		}
 		klog.V(2).Infof("NodePublishVolume [block]: found device path %s with lun %s", source, lun)
 		if err = d.ensureBlockTargetFile(target); err != nil {
-			return nil, status.Errorf(codes.Internal, err.Error())
+			return nil, status.Errorf(codes.Internal, "%v", err)
 		}
 	case *csi.VolumeCapability_Mount:
 		mnt, err := d.ensureMountPoint(target)
@@ -439,12 +439,12 @@ func (d *DriverV2) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolu
 
 	if isBlock {
 		if d.enableDiskOnlineResize {
-			klog.V(2).Infof("NodeExpandVolume begin to rescan all devices on block volume(%s)", volumeID)
+			klog.V(2).Info("NodeExpandVolume begin to rescan all devices on block volume(%s)", volumeID)
 			if err := rescanAllVolumes(d.ioHandler); err != nil {
 				klog.Errorf("NodeExpandVolume rescanAllVolumes failed with error: %v", err)
 			}
 		}
-		klog.V(2).Infof("NodeExpandVolume skip resize operation on block volume(%s)", volumeID)
+		klog.V(2).Info("NodeExpandVolume skip resize operation on block volume(%s)", volumeID)
 		return &csi.NodeExpandVolumeResponse{}, nil
 	}
 
@@ -455,11 +455,11 @@ func (d *DriverV2) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolu
 
 	devicePath, err := getDevicePathWithMountPath(volumePath, d.mounter)
 	if err != nil {
-		return nil, status.Errorf(codes.NotFound, err.Error())
+		return nil, status.Errorf(codes.NotFound, "%v", err)
 	}
 
 	if d.enableDiskOnlineResize {
-		klog.V(2).Infof("NodeExpandVolume begin to rescan device %s on volume(%s)", devicePath, volumeID)
+		klog.V(2).Info("NodeExpandVolume begin to rescan device %s on volume(%s)", devicePath, volumeID)
 		if err := rescanVolume(d.ioHandler, devicePath); err != nil {
 			klog.Errorf("NodeExpandVolume rescanVolume failed with error: %v", err)
 		}

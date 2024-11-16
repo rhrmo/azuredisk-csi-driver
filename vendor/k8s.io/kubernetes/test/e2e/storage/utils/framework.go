@@ -16,7 +16,9 @@ limitations under the License.
 
 package utils
 
-import "k8s.io/kubernetes/test/e2e/framework"
+import "github.com/onsi/ginkgo/v2"
 
 // SIGDescribe annotates the test with the SIG label.
-var SIGDescribe = framework.SIGDescribe("storage")
+func SIGDescribe(text string, body func()) bool {
+	return ginkgo.Describe("[sig-storage] "+text, body)
+}

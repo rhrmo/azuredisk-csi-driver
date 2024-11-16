@@ -23,29 +23,24 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v5"
+	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2022-08-01/compute"
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
-	"go.uber.org/mock/gomock"
 	consts "sigs.k8s.io/azuredisk-csi-driver/pkg/azureconstants"
-	"sigs.k8s.io/cloud-provider-azure/pkg/azclient/diskclient/mock_diskclient"
-	"sigs.k8s.io/cloud-provider-azure/pkg/azclient/mock_azclient"
+	"sigs.k8s.io/cloud-provider-azure/pkg/azureclients/diskclient/mockdiskclient"
 )
 
 func TestCheckDiskCapacity_V1(t *testing.T) {
-	cntl := gomock.NewController(t)
-	defer cntl.Finish()
-	d, _ := NewFakeDriver(cntl)
+	d, _ := NewFakeDriver(t)
 	size := int32(10)
 	diskName := "unit-test"
 	resourceGroup := "unit-test"
-	disk := &armcompute.Disk{
-		Properties: &armcompute.DiskProperties{
+	disk := compute.Disk{
+		DiskProperties: &compute.DiskProperties{
 			DiskSizeGB: &size,
 		},
 	}
-	diskClient := mock_diskclient.NewMockInterface(cntl)
-	d.getClientFactory().(*mock_azclient.MockClientFactory).EXPECT().GetDiskClientForSub("").Return(diskClient, nil).AnyTimes()
-	diskClient.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any()).Return(disk, nil).AnyTimes()
+	d.getCloud().DisksClient.(*mockdiskclient.MockInterface).EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(disk, nil).AnyTimes()
 
 	d.setThrottlingCache(consts.GetDiskThrottlingKey, "")
 	flag, _ := d.checkDiskCapacity(context.TODO(), "", resourceGroup, diskName, 11)
@@ -53,9 +48,7 @@ func TestCheckDiskCapacity_V1(t *testing.T) {
 }
 
 func TestDriver_checkDiskExists_V1(t *testing.T) {
-	cntl := gomock.NewController(t)
-	defer cntl.Finish()
-	d, _ := NewFakeDriver(cntl)
+	d, _ := NewFakeDriver(t)
 	d.setThrottlingCache(consts.GetDiskThrottlingKey, "")
 	_, err := d.checkDiskExists(context.TODO(), "testurl/subscriptions/12/resourceGroups/23/providers/Microsoft.Compute/disks/name")
 	assert.Equal(t, err, nil)

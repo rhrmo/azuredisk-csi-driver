@@ -29,11 +29,11 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2022-08-01/compute"
+	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2022-08-01/compute" //nolint: staticcheck
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	testingexec "k8s.io/utils/exec/testing"
@@ -100,9 +100,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestNodeGetCapabilities(t *testing.T) {
-	cntl := gomock.NewController(t)
-	defer cntl.Finish()
-	d, _ := NewFakeDriver(cntl)
+	d, _ := NewFakeDriver(t)
 	capType := &csi.NodeServiceCapability_Rpc{
 		Rpc: &csi.NodeServiceCapability_RPC{
 			Type: csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME,
@@ -198,31 +196,30 @@ func TestEnsureMountPoint(t *testing.T) {
 		},
 	}
 
+	// Setup
+	_ = makeDir(alreadyExistTarget)
+	d, _ := NewFakeDriver(t)
+	fakeMounter, err := mounter.NewFakeSafeMounter()
+	assert.NoError(t, err)
+	d.setMounter(fakeMounter)
+
 	for _, test := range tests {
-		// Setup
-		cntl := gomock.NewController(t)
-		_ = makeDir(alreadyExistTarget)
-		d, _ := NewFakeDriver(cntl)
-		fakeMounter, err := mounter.NewFakeSafeMounter()
-		assert.NoError(t, err)
-		d.setMounter(fakeMounter)
 		if !(runtime.GOOS == "windows" && test.skipOnWindows) && !(runtime.GOOS == "darwin" && test.skipOnDarwin) {
 			mnt, err := d.ensureMountPoint(test.target)
 			if !testutil.AssertError(&test.expectedErr, err) {
-				t.Errorf("desc: %s\n actualErr: (%v), expectedErr: (%v)", test.desc, err, test.expectedErr.Error())
+				t.Errorf("desc: %s\n actualErr: (%v), expectedErr: (%v)", test.desc, err, test.expectedErr)
 			}
 			if err == nil {
 				assert.Equal(t, test.expectedMnt, mnt)
 			}
 		}
-		// Clean up
-		err = os.RemoveAll(alreadyExistTarget)
-		assert.NoError(t, err)
-		err = os.RemoveAll(targetTest)
-		assert.NoError(t, err)
-		cntl.Finish()
 	}
 
+	// Clean up
+	err = os.RemoveAll(alreadyExistTarget)
+	assert.NoError(t, err)
+	err = os.RemoveAll(targetTest)
+	assert.NoError(t, err)
 }
 
 func TestNodeGetInfo(t *testing.T) {
@@ -235,8 +232,8 @@ func TestNodeGetInfo(t *testing.T) {
 		desc         string
 		expectedErr  error
 		skipOnDarwin bool
-		setupFunc    func(t *testing.T, d FakeDriver)
-		validateFunc func(t *testing.T, resp *csi.NodeGetInfoResponse)
+		setupFunc    func(_ *testing.T, _ FakeDriver)
+		validateFunc func(_ *testing.T, _ *csi.NodeGetInfoResponse)
 	}{
 		{
 			desc:         "[Success] Get node information for existing VM",
@@ -271,7 +268,7 @@ func TestNodeGetInfo(t *testing.T) {
 		{
 			desc:        "[Failure] Get node information for non-existing VM",
 			expectedErr: status.Error(codes.Internal, fmt.Sprintf("getNodeInfoFromLabels on node(%s) failed with %s", "fakeNodeID", "kubeClient is nil")),
-			setupFunc: func(t *testing.T, d FakeDriver) {
+			setupFunc: func(_ *testing.T, d FakeDriver) {
 				d.getCloud().VirtualMachinesClient.(*mockvmclient.MockInterface).EXPECT().
 					Get(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 					Return(compute.VirtualMachine{}, notFoundErr).
@@ -287,12 +284,10 @@ func TestNodeGetInfo(t *testing.T) {
 	for _, test := range tests {
 		test := test
 		t.Run(test.desc, func(t *testing.T) {
-			cntl := gomock.NewController(t)
-			defer cntl.Finish()
 			if test.skipOnDarwin && runtime.GOOS == "darwin" {
 				t.Skip("Skip test case on Darwin")
 			}
-			d, err := NewFakeDriver(cntl)
+			d, err := NewFakeDriver(t)
 			require.NoError(t, err)
 
 			test.setupFunc(t, d)
@@ -340,7 +335,7 @@ func TestNodeGetVolumeStats(t *testing.T) {
 		},
 		{
 			desc: "Block volume path success",
-			setupFunc: func(t *testing.T, d FakeDriver) {
+			setupFunc: func(_ *testing.T, d FakeDriver) {
 				d.getHostUtil().(*azureutils.FakeHostUtil).SetPathIsDeviceResult(blockVolumePath, true, nil)
 				d.setNextCommandOutputScripts(blockdevAction)
 			},
@@ -358,7 +353,7 @@ func TestNodeGetVolumeStats(t *testing.T) {
 		},
 		{
 			desc: "failed to determine block device",
-			setupFunc: func(t *testing.T, d FakeDriver) {
+			setupFunc: func(_ *testing.T, d FakeDriver) {
 				d.getHostUtil().(*azureutils.FakeHostUtil).SetPathIsDeviceResult(fakePath, true, fmt.Errorf("host util is not device path"))
 			},
 			req:           csi.NodeGetVolumeStatsRequest{VolumePath: fakePath, VolumeId: "vol_1"},
@@ -368,15 +363,15 @@ func TestNodeGetVolumeStats(t *testing.T) {
 		},
 	}
 
+	// Setup
+	_ = makeDir(fakePath)
+	_ = makeDir(blockVolumePath)
+	d, _ := NewFakeDriver(t)
+	mounter, err := mounter.NewFakeSafeMounter()
+	assert.NoError(t, err)
+	d.setMounter(mounter)
+
 	for _, test := range tests {
-		cntl := gomock.NewController(t)
-		// Setup
-		_ = makeDir(fakePath)
-		_ = makeDir(blockVolumePath)
-		d, _ := NewFakeDriver(cntl)
-		mounter, err := mounter.NewFakeSafeMounter()
-		assert.NoError(t, err)
-		d.setMounter(mounter)
 		if !(test.skipOnDarwin && runtime.GOOS == "darwin") && !(test.skipOnWindows && runtime.GOOS == "windows") {
 			if test.setupFunc != nil {
 				test.setupFunc(t, d)
@@ -386,19 +381,17 @@ func TestNodeGetVolumeStats(t *testing.T) {
 				t.Errorf("desc: %s\n actualErr: (%v), expectedErr: (%v)", test.desc, err, test.expectedErr)
 			}
 		}
-		// Clean up
-		err = os.RemoveAll(fakePath)
-		assert.NoError(t, err)
-		err = os.RemoveAll(blockVolumePath)
-		assert.NoError(t, err)
-		cntl.Finish()
 	}
+
+	// Clean up
+	err = os.RemoveAll(fakePath)
+	assert.NoError(t, err)
+	err = os.RemoveAll(blockVolumePath)
+	assert.NoError(t, err)
 }
 
 func TestNodeStageVolume(t *testing.T) {
-	cntl := gomock.NewController(t)
-	defer cntl.Finish()
-	d, _ := NewFakeDriver(cntl)
+	d, _ := NewFakeDriver(t)
 
 	stdVolCap := &csi.VolumeCapability_Mount{
 		Mount: &csi.VolumeCapability_MountVolume{
@@ -481,13 +474,13 @@ func TestNodeStageVolume(t *testing.T) {
 		},
 		{
 			desc: "Volume operation in progress",
-			setupFunc: func(t *testing.T, d FakeDriver) {
+			setupFunc: func(_ *testing.T, d FakeDriver) {
 				d.getVolumeLocks().TryAcquire("vol_1")
 			},
 			req: csi.NodeStageVolumeRequest{VolumeId: "vol_1", StagingTargetPath: sourceTest, VolumeCapability: &csi.VolumeCapability{AccessMode: &volumeCap,
 				AccessType: stdVolCapBlock}},
 			expectedErr: status.Error(codes.Aborted, fmt.Sprintf(volumeOperationAlreadyExistsFmt, "vol_1")),
-			cleanupFunc: func(t *testing.T, d FakeDriver) {
+			cleanupFunc: func(_ *testing.T, d FakeDriver) {
 				d.getVolumeLocks().Release("vol_1")
 			},
 		},
@@ -512,7 +505,7 @@ func TestNodeStageVolume(t *testing.T) {
 			desc:          "Successfully staged",
 			skipOnDarwin:  true,
 			skipOnWindows: true,
-			setupFunc: func(t *testing.T, d FakeDriver) {
+			setupFunc: func(_ *testing.T, d FakeDriver) {
 				d.setNextCommandOutputScripts(blkidAction, fsckAction, blockSizeAction, blkidAction, blockSizeAction, blkidAction)
 			},
 			req: csi.NodeStageVolumeRequest{VolumeId: "vol_1", StagingTargetPath: sourceTest,
@@ -527,7 +520,7 @@ func TestNodeStageVolume(t *testing.T) {
 			desc:          "Successfully with resize",
 			skipOnDarwin:  true,
 			skipOnWindows: true,
-			setupFunc: func(t *testing.T, d FakeDriver) {
+			setupFunc: func(_ *testing.T, d FakeDriver) {
 				d.setNextCommandOutputScripts(blkidAction, fsckAction, blkidAction, resize2fsAction)
 			},
 			req: csi.NodeStageVolumeRequest{VolumeId: "vol_1", StagingTargetPath: sourceTest,
@@ -542,7 +535,7 @@ func TestNodeStageVolume(t *testing.T) {
 			desc:          "failed to get perf attributes",
 			skipOnDarwin:  true,
 			skipOnWindows: true,
-			setupFunc: func(t *testing.T, d FakeDriver) {
+			setupFunc: func(_ *testing.T, d FakeDriver) {
 				d.setPerfOptimizationEnabled(true)
 				d.setNextCommandOutputScripts(blkidAction, fsckAction, blockSizeAction, blockSizeAction)
 			},
@@ -552,7 +545,7 @@ func TestNodeStageVolume(t *testing.T) {
 				PublishContext: publishContext,
 				VolumeContext:  volumeContextWithPerfProfileField,
 			},
-			cleanupFunc: func(t *testing.T, d FakeDriver) {
+			cleanupFunc: func(_ *testing.T, d FakeDriver) {
 				d.setPerfOptimizationEnabled(false)
 			},
 			expectedErr: status.Errorf(codes.Internal, "failed to get perf attributes for /dev/sdd. Error: %v", fmt.Errorf("Perf profile wrong is invalid")),
@@ -561,7 +554,7 @@ func TestNodeStageVolume(t *testing.T) {
 			desc:          "Successfully staged with performance optimizations",
 			skipOnDarwin:  true,
 			skipOnWindows: true,
-			setupFunc: func(t *testing.T, d FakeDriver) {
+			setupFunc: func(_ *testing.T, d FakeDriver) {
 				d.setPerfOptimizationEnabled(true)
 				mockoptimization := d.getDeviceHelper().(*mockoptimization.MockInterface)
 				diskSupportsPerfOptimizationCall := mockoptimization.EXPECT().
@@ -580,7 +573,7 @@ func TestNodeStageVolume(t *testing.T) {
 				PublishContext: publishContext,
 				VolumeContext:  volumeContext,
 			},
-			cleanupFunc: func(t *testing.T, d FakeDriver) {
+			cleanupFunc: func(_ *testing.T, d FakeDriver) {
 				d.setPerfOptimizationEnabled(false)
 			},
 			expectedErr: nil,
@@ -589,7 +582,7 @@ func TestNodeStageVolume(t *testing.T) {
 			desc:          "failed to optimize device performance",
 			skipOnDarwin:  true,
 			skipOnWindows: true,
-			setupFunc: func(t *testing.T, d FakeDriver) {
+			setupFunc: func(_ *testing.T, d FakeDriver) {
 				d.setPerfOptimizationEnabled(true)
 				mockoptimization := d.getDeviceHelper().(*mockoptimization.MockInterface)
 				diskSupportsPerfOptimizationCall := mockoptimization.EXPECT().
@@ -608,7 +601,7 @@ func TestNodeStageVolume(t *testing.T) {
 				PublishContext: publishContext,
 				VolumeContext:  volumeContext,
 			},
-			cleanupFunc: func(t *testing.T, d FakeDriver) {
+			cleanupFunc: func(_ *testing.T, d FakeDriver) {
 				d.setPerfOptimizationEnabled(false)
 			},
 			expectedErr: status.Errorf(codes.Internal, "failed to optimize device performance for target(/dev/sdd) error(%s)", fmt.Errorf("failed to optimize device performance")),
@@ -617,7 +610,7 @@ func TestNodeStageVolume(t *testing.T) {
 			desc:          "Successfully staged with perf optimization is disabled",
 			skipOnDarwin:  true,
 			skipOnWindows: true,
-			setupFunc: func(t *testing.T, d FakeDriver) {
+			setupFunc: func(_ *testing.T, d FakeDriver) {
 				d.setPerfOptimizationEnabled(true)
 				mockoptimization := d.getDeviceHelper().(*mockoptimization.MockInterface)
 				mockoptimization.EXPECT().
@@ -632,21 +625,21 @@ func TestNodeStageVolume(t *testing.T) {
 				PublishContext: publishContext,
 				VolumeContext:  volumeContext,
 			},
-			cleanupFunc: func(t *testing.T, d FakeDriver) {
+			cleanupFunc: func(_ *testing.T, d FakeDriver) {
 				d.setPerfOptimizationEnabled(false)
 			},
 			expectedErr: nil,
 		},
 	}
 
-	for _, test := range tests {
+	// Setup
+	_ = makeDir(sourceTest)
+	_ = makeDir(targetTest)
+	fakeMounter, err := mounter.NewFakeSafeMounter()
+	assert.NoError(t, err)
+	d.setMounter(fakeMounter)
 
-		// Setup
-		_ = makeDir(sourceTest)
-		_ = makeDir(targetTest)
-		fakeMounter, err := mounter.NewFakeSafeMounter()
-		assert.NoError(t, err)
-		d.setMounter(fakeMounter)
+	for _, test := range tests {
 		if !(test.skipOnDarwin && runtime.GOOS == "darwin") && !(test.skipOnWindows && runtime.GOOS == "windows") {
 			if test.setupFunc != nil {
 				test.setupFunc(t, d)
@@ -661,19 +654,17 @@ func TestNodeStageVolume(t *testing.T) {
 				test.cleanupFunc(t, d)
 			}
 		}
-		// Clean up
-		err = os.RemoveAll(sourceTest)
-		assert.NoError(t, err)
-		err = os.RemoveAll(targetTest)
-		assert.NoError(t, err)
 	}
 
+	// Clean up
+	err = os.RemoveAll(sourceTest)
+	assert.NoError(t, err)
+	err = os.RemoveAll(targetTest)
+	assert.NoError(t, err)
 }
 
 func TestNodeUnstageVolume(t *testing.T) {
-	cntl := gomock.NewController(t)
-	defer cntl.Finish()
-	d, _ := NewFakeDriver(cntl)
+	d, _ := NewFakeDriver(t)
 	errorTarget, err := testutil.GetWorkDirPath("error_is_likely_target")
 	assert.NoError(t, err)
 	targetFile, err := testutil.GetWorkDirPath("abc.go")
@@ -746,7 +737,7 @@ func TestNodeUnstageVolume(t *testing.T) {
 			!(runtime.GOOS == "darwin" && test.skipOnDarwin) {
 			_, err := d.NodeUnstageVolume(context.Background(), &test.req)
 			if !testutil.AssertError(&test.expectedErr, err) {
-				t.Errorf("desc: %s\n actualErr: (%v), expectedErr: (%v)", test.desc, err, test.expectedErr.Error())
+				t.Errorf("desc: %s\n actualErr: (%v), expectedErr: (%v)", test.desc, err, test.expectedErr)
 			}
 		}
 		if test.cleanup != nil {
@@ -760,9 +751,7 @@ func TestNodeUnstageVolume(t *testing.T) {
 }
 
 func TestNodePublishVolume(t *testing.T) {
-	cntl := gomock.NewController(t)
-	defer cntl.Finish()
-	d, _ := NewFakeDriver(cntl)
+	d, _ := NewFakeDriver(t)
 
 	volumeCap := csi.VolumeCapability_AccessMode{Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_SINGLE_WRITER}
 	volumeCapWrong := csi.VolumeCapability_AccessMode{Mode: 10}
@@ -860,8 +849,8 @@ func TestNodePublishVolume(t *testing.T) {
 			skipOnWindows: true, // permission issues
 			skipOnDarwin:  true,
 			expectedErr: testutil.TestError{
-				DefaultError: status.Errorf(codes.Internal, fmt.Sprintf("could not mount target \"%s\": "+
-					"mkdir %s: not a directory", azuredisk, azuredisk)),
+				DefaultError: status.Errorf(codes.Internal, "could not mount target \"%s\": "+
+					"mkdir %s: not a directory", azuredisk, azuredisk),
 			},
 		},
 		{
@@ -896,8 +885,8 @@ func TestNodePublishVolume(t *testing.T) {
 				Readonly:          true},
 			skipOnWindows: true, // permission issues
 			expectedErr: testutil.TestError{
-				DefaultError: status.Errorf(codes.Internal, fmt.Sprintf("could not mount \"%s\" at \"%s\": "+
-					"fake Mount: source error", errorMountSource, targetTest)),
+				DefaultError: status.Errorf(codes.Internal, "could not mount \"%s\" at \"%s\": "+
+					"fake Mount: source error", errorMountSource, targetTest),
 			},
 		},
 		{
@@ -937,7 +926,7 @@ func TestNodePublishVolume(t *testing.T) {
 			var err error
 			_, err = d.NodePublishVolume(context.Background(), &test.req)
 			if !testutil.AssertError(&test.expectedErr, err) {
-				t.Errorf("desc: %s\n actualErr: (%v), expectedErr: (%v)", test.desc, err, test.expectedErr.Error())
+				t.Errorf("desc: %s\n actualErr: (%v), expectedErr: (%v)", test.desc, err, test.expectedErr)
 			}
 		}
 		if test.cleanup != nil {
@@ -953,8 +942,7 @@ func TestNodePublishVolume(t *testing.T) {
 }
 
 func TestNodeUnpublishVolume(t *testing.T) {
-	cntl := gomock.NewController(t)
-	d, _ := NewFakeDriver(cntl)
+	d, _ := NewFakeDriver(t)
 	errorTarget, err := testutil.GetWorkDirPath("error_is_likely_target")
 	assert.NoError(t, err)
 	targetFile, err := testutil.GetWorkDirPath("abc.go")
@@ -1013,7 +1001,7 @@ func TestNodeUnpublishVolume(t *testing.T) {
 			!(test.skipOnDarwin && runtime.GOOS == "darwin") {
 			_, err := d.NodeUnpublishVolume(context.Background(), &test.req)
 			if !testutil.AssertError(&test.expectedErr, err) {
-				t.Errorf("desc: %s\n actualErr: (%v), expectedErr: (%v)", test.desc, err, test.expectedErr.Error())
+				t.Errorf("desc: %s\n actualErr: (%v), expectedErr: (%v)", test.desc, err, test.expectedErr)
 			}
 		}
 		if test.cleanup != nil {
@@ -1027,9 +1015,7 @@ func TestNodeUnpublishVolume(t *testing.T) {
 }
 
 func TestNodeExpandVolume(t *testing.T) {
-	cntl := gomock.NewController(t)
-	defer cntl.Finish()
-	d, _ := NewFakeDriver(cntl)
+	d, _ := NewFakeDriver(t)
 	fakeMounter, err := mounter.NewFakeSafeMounter()
 	assert.NoError(t, err)
 	d.setMounter(fakeMounter)
@@ -1220,7 +1206,7 @@ func TestNodeExpandVolume(t *testing.T) {
 
 		_, err := d.NodeExpandVolume(context.Background(), &test.req)
 		if !testutil.AssertError(&test.expectedErr, err) {
-			t.Errorf("desc: %s\n actualErr: (%v), expectedErr: (%v)", test.desc, err, test.expectedErr.Error())
+			t.Errorf("desc: %s\n actualErr: (%v), expectedErr: (%v)", test.desc, err, test.expectedErr)
 		}
 	}
 	err = os.RemoveAll(targetTest)
@@ -1230,12 +1216,10 @@ func TestNodeExpandVolume(t *testing.T) {
 }
 
 func TestGetBlockSizeBytes(t *testing.T) {
-	cntl := gomock.NewController(t)
-	defer cntl.Finish()
 	if runtime.GOOS == "windows" {
 		t.Skip("Skipping test on Windows")
 	}
-	d, _ := NewFakeDriver(cntl)
+	d, _ := NewFakeDriver(t)
 	testTarget, err := testutil.GetWorkDirPath("test")
 	assert.NoError(t, err)
 
@@ -1274,7 +1258,7 @@ func TestGetBlockSizeBytes(t *testing.T) {
 	for _, test := range tests {
 		_, err := getBlockSizeBytes(test.req, d.getMounter())
 		if !testutil.AssertError(&test.expectedErr, err) {
-			t.Errorf("desc: %s\n actualErr: (%v), expectedErr: (%v)", test.desc, err, test.expectedErr.Error())
+			t.Errorf("desc: %s\n actualErr: (%v), expectedErr: (%v)", test.desc, err, test.expectedErr)
 		}
 	}
 	//Setup
@@ -1285,8 +1269,6 @@ func TestGetBlockSizeBytes(t *testing.T) {
 }
 
 func TestEnsureBlockTargetFile(t *testing.T) {
-	cntl := gomock.NewController(t)
-	defer cntl.Finish()
 	// sip this test because `util/mount` not supported
 	// on darwin
 	if runtime.GOOS == "darwin" {
@@ -1296,7 +1278,7 @@ func TestEnsureBlockTargetFile(t *testing.T) {
 	assert.NoError(t, err)
 	testPath, err := testutil.GetWorkDirPath(fmt.Sprintf("test%ctest", os.PathSeparator))
 	assert.NoError(t, err)
-	d, err := NewFakeDriver(cntl)
+	d, err := NewFakeDriver(t)
 	assert.NoError(t, err)
 
 	tests := []struct {
@@ -1321,7 +1303,7 @@ func TestEnsureBlockTargetFile(t *testing.T) {
 	for _, test := range tests {
 		err := d.ensureBlockTargetFile(test.req)
 		if !testutil.AssertError(&test.expectedErr, err) {
-			t.Errorf("desc: %s\n actualErr: (%v), expectedErr: (%v)", test.desc, err, test.expectedErr.Error())
+			t.Errorf("desc: %s\n actualErr: (%v), expectedErr: (%v)", test.desc, err, test.expectedErr)
 		}
 	}
 	err = os.RemoveAll(testTarget)
@@ -1356,9 +1338,7 @@ func TestMakeDir(t *testing.T) {
 }
 
 func TestGetDevicePathWithLUN(t *testing.T) {
-	cntl := gomock.NewController(t)
-	defer cntl.Finish()
-	d, _ := NewFakeDriver(cntl)
+	d, _ := NewFakeDriver(t)
 	tests := []struct {
 		desc        string
 		req         string
@@ -1379,9 +1359,7 @@ func TestGetDevicePathWithLUN(t *testing.T) {
 }
 
 func TestGetDevicePathWithMountPath(t *testing.T) {
-	cntl := gomock.NewController(t)
-	defer cntl.Finish()
-	d, _ := NewFakeDriver(cntl)
+	d, _ := NewFakeDriver(t)
 	err := "exit status 1"
 
 	if runtime.GOOS == "darwin" {
@@ -1422,8 +1400,6 @@ func TestGetDevicePathWithMountPath(t *testing.T) {
 }
 
 func TestNodePublishVolumeIdempotentMount(t *testing.T) {
-	cntl := gomock.NewController(t)
-	defer cntl.Finish()
 	if runtime.GOOS == "windows" || os.Getuid() != 0 {
 		return
 	}
@@ -1434,7 +1410,7 @@ func TestNodePublishVolumeIdempotentMount(t *testing.T) {
 	}
 	_ = makeDir(sourceTest)
 	_ = makeDir(targetTest)
-	d, _ := NewFakeDriver(cntl)
+	d, _ := NewFakeDriver(t)
 
 	volumeCap := csi.VolumeCapability_AccessMode{Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER}
 	req := csi.NodePublishVolumeRequest{VolumeCapability: &csi.VolumeCapability{AccessMode: &volumeCap, AccessType: stdVolCap},
